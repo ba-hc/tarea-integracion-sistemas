@@ -1,0 +1,562 @@
+openapi: 3.1.2
+info:
+  title: RepuestosSur Sales API
+  version: 1.0.0
+  description: >-
+    Public REST API for customer and sales-order operations. Inventory is an
+    internal dependency and is never exposed directly through this API.
+servers:
+  - url: http://localhost:3000
+    description: Local Docker environment
+tags:
+  - name: Health
+  - name: Customers
+  - name: Orders
+security:
+  - ApiKeyAuth: []
+paths:
+  /v1/health:
+    get:
+      tags: [Health]
+      summary: Check Sales API health
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Sales API is running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /v1/customers:
+    post:
+      tags: [Customers]
+      summary: Create a customer
+      operationId: createCustomer
+      x-required-role: operator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerCreateRequest'
+      responses:
+        '201':
+          description: Customer created
+          headers:
+            Location:
+              schema: { type: string }
+            X-Trace-Id:
+              $ref: '#/components/headers/TraceId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Customer email already exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                duplicateEmail:
+                  value:
+                    code: CUSTOMER_EMAIL_CONFLICT
+                    message: A customer with this email already exists
+                    traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+        '500': { $ref: '#/components/responses/InternalServerError' }
+    get:
+      tags: [Customers]
+      summary: List customers
+      operationId: listCustomers
+      x-required-role: reader-or-operator
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated customer list
+          headers:
+            X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/customers/{customerId}:
+    get:
+      tags: [Customers]
+      summary: Get a customer by id
+      operationId: getCustomer
+      x-required-role: reader-or-operator
+      parameters:
+        - $ref: '#/components/parameters/CustomerId'
+      responses:
+        '200':
+          description: Customer found
+          headers:
+            X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Customer' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: Customer not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                notFound:
+                  value:
+                    code: CUSTOMER_NOT_FOUND
+                    message: Customer not found
+                    traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/orders:
+    post:
+      tags: [Orders]
+      summary: Create and confirm a sales order
+      description: >-
+        Creates an order only if Inventory atomically reserves stock for every
+        requested item. Idempotency-Key is mandatory. Retrying the same payload
+        with the same key returns the same result and does not create a second
+        order. Reusing the key with a different payload returns 409.
+      operationId: createOrder
+      x-required-role: operator
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderCreateRequest'
+      responses:
+        '201':
+          description: Order confirmed
+          headers:
+            Location:
+              schema: { type: string }
+            X-Trace-Id:
+              $ref: '#/components/headers/TraceId'
+            Idempotency-Replayed:
+              description: true when the response is replayed from a previous successful request
+              schema: { type: boolean }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: Customer does not exist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                customerNotFound:
+                  value:
+                    code: CUSTOMER_NOT_FOUND
+                    message: Customer not found
+                    traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+        '409':
+          description: Stock conflict or idempotency conflict
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                insufficientStock:
+                  value:
+                    code: INSUFFICIENT_STOCK
+                    message: One or more parts do not have enough stock
+                    traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+                idempotencyConflict:
+                  value:
+                    code: IDEMPOTENCY_KEY_CONFLICT
+                    message: This Idempotency-Key was already used with a different request payload
+                    traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+        '422':
+          description: A referenced part does not exist in Inventory
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                partNotFound:
+                  value:
+                    code: PART_NOT_FOUND
+                    message: One or more requested parts do not exist
+                    traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+        '503': { $ref: '#/components/responses/InventoryUnavailable' }
+        '504': { $ref: '#/components/responses/InventoryTimeout' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+    get:
+      tags: [Orders]
+      summary: List orders
+      operationId: listOrders
+      x-required-role: reader-or-operator
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/OrderStatus' }
+        - name: customerId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Paginated order list
+          headers:
+            X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/orders/{orderId}:
+    get:
+      tags: [Orders]
+      summary: Get an order by id
+      operationId: getOrder
+      x-required-role: reader-or-operator
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Order found
+          headers:
+            X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: Order not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                notFound:
+                  value:
+                    code: ORDER_NOT_FOUND
+                    message: Order not found
+                    traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/orders/{orderId}/cancel:
+    post:
+      tags: [Orders]
+      summary: Cancel an order and restore its stock
+      description: >-
+        Cancellation is idempotent. If the order is already CANCELLED, returns
+        the existing cancelled representation with 200 and does not restore
+        stock twice. The local order is marked CANCELLED only after Inventory
+        confirms the release.
+      operationId: cancelOrder
+      x-required-role: operator
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Order cancelled, or previously cancelled order returned
+          headers:
+            X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: Order not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                notFound:
+                  value:
+                    code: ORDER_NOT_FOUND
+                    message: Order not found
+                    traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+        '503': { $ref: '#/components/responses/InventoryUnavailable' }
+        '504': { $ref: '#/components/responses/InventoryTimeout' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >-
+        API key configured outside source control. reader keys can execute GET
+        operations; operator keys can execute both GET and POST operations.
+  headers:
+    TraceId:
+      description: Request correlation identifier generated by Sales API
+      schema:
+        type: string
+        format: uuid
+  parameters:
+    CustomerId:
+      name: customerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: pageSize
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Unique key for one logical order-creation attempt
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]+$'
+  responses:
+    BadRequest:
+      description: Invalid request syntax, identifier or validation failure
+      headers:
+        X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            validation:
+              value:
+                code: VALIDATION_ERROR
+                message: Request validation failed
+                traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+                details:
+                  fieldErrors:
+                    - field: items[0].quantity
+                      reason: must be greater than or equal to 1
+    Unauthorized:
+      description: API key is missing or invalid
+      headers:
+        X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+        WWW-Authenticate:
+          schema:
+            type: string
+            example: 'ApiKey realm="repuestossur"'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            invalidKey:
+              value:
+                code: UNAUTHORIZED
+                message: Missing or invalid API key
+                traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+    Forbidden:
+      description: API key is valid but lacks the required role
+      headers:
+        X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            role:
+              value:
+                code: FORBIDDEN
+                message: The API key does not have permission for this operation
+                traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+    InventoryUnavailable:
+      description: Inventory service is unavailable
+      headers:
+        X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            unavailable:
+              value:
+                code: INVENTORY_UNAVAILABLE
+                message: Inventory service is unavailable
+                traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+    InventoryTimeout:
+      description: Inventory did not respond before the configured deadline
+      headers:
+        X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            timeout:
+              value:
+                code: INVENTORY_TIMEOUT
+                message: Inventory service did not respond before the deadline
+                traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+    InternalServerError:
+      description: Unexpected internal error
+      headers:
+        X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            internal:
+              value:
+                code: INTERNAL_ERROR
+                message: An unexpected internal error occurred
+                traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          const: ok
+        service:
+          type: string
+          const: sales-api
+    CustomerCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, email]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        email:
+          type: string
+          format: email
+          maxLength: 254
+    Customer:
+      type: object
+      additionalProperties: false
+      required: [id, name, email, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CustomerList:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Customer' }
+    OrderCreateItem:
+      type: object
+      additionalProperties: false
+      required: [partId, quantity]
+      properties:
+        partId: { type: string, format: uuid }
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 999
+    OrderCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [customerId, items]
+      properties:
+        customerId: { type: string, format: uuid }
+        items:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: '#/components/schemas/OrderCreateItem' }
+          description: partId values must be unique within one order
+    OrderStatus:
+      type: string
+      enum: [CONFIRMED, CANCELLED]
+    OrderItem:
+      type: object
+      additionalProperties: false
+      required: [partId, sku, name, quantity]
+      properties:
+        partId: { type: string, format: uuid }
+        sku: { type: string }
+        name: { type: string }
+        quantity: { type: integer, minimum: 1 }
+    Order:
+      type: object
+      additionalProperties: false
+      required: [id, customerId, status, items, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        customerId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/OrderItem' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        cancelledAt:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+    OrderList:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Order' }
+    PaginationMeta:
+      type: object
+      required: [page, pageSize, total]
+      properties:
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1 }
+        total: { type: integer, minimum: 0 }
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message, traceId]
+      properties:
+        code:
+          type: string
+          pattern: '^[A-Z0-9_]+$'
+        message:
+          type: string
+        traceId:
+          type: string
+          format: uuid
+        details:
+          type: object
+          additionalProperties: true
