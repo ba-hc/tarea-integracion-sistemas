@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs
+*.log
+logs/
+
+# IDE / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Prisma / local databases
+*.db
+*.db-journal
+
+# Docker/local runtime data
+.docker-data/
+volumes/
+
+# k6 / experiment raw output
+experiments/**/raw/
+experiments/**/*.ndjson
+
+# Temporary files
+.tmp/
+tmp/
+*.zip
