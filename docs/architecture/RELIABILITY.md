@@ -1,31 +1,31 @@
-# Reliability contract
+# Contrato de resiliencia
 
 ## Deadline
 
-`INVENTORY_RPC_DEADLINE_MS=800` is the frozen v1 default.
+`INVENTORY_RPC_DEADLINE_MS=800` es el valor predeterminado congelado para v1.
 
-Sales applies it to `GetPart`, `ListParts`, `ReserveStock` and `ReleaseStock`. The value is configuration-driven so the experiment can run alternate values without changing code.
+Sales lo aplica a `GetPart`, `ListParts`, `ReserveStock` y `ReleaseStock`. El valor se controla mediante configuración para que el experimento pueda ejecutar valores alternativos sin modificar código.
 
 ## Retries
 
-No automatic gRPC retries in v1. This is deliberate:
-- mutation behavior remains easy to explain,
-- fault experiments are not hidden by transparent retries,
-- explicit application/client retries can rely on idempotency.
+No existen retries automáticos de gRPC en v1. Esto es deliberado:
+- el comportamiento de las mutaciones sigue siendo fácil de explicar;
+- los experimentos de fallas no quedan ocultos por retries transparentes;
+- los retries explícitos de aplicación o cliente pueden apoyarse en la idempotencia.
 
-## Idempotency
+## Idempotencia
 
-### Public create-order
-`Idempotency-Key` is required.
+### Creación pública de órdenes
+Se requiere `Idempotency-Key`.
 
-For the same key:
-- same normalized request payload + completed request -> replay the original response;
-- different payload -> HTTP 409 `IDEMPOTENCY_KEY_CONFLICT`;
-- concurrent duplicate while first request is still executing -> implementation may serialize/wait briefly or return HTTP 409 with a stable in-progress error, but it must never create two orders.
+Para una misma key:
+- mismo payload normalizado + solicitud completada -> reproducir la respuesta original;
+- payload diferente -> HTTP 409 `IDEMPOTENCY_KEY_CONFLICT`;
+- duplicado concurrente mientras la primera solicitud sigue ejecutándose -> la implementación puede serializar/esperar brevemente o devolver HTTP 409 con un error estable de operación en curso, pero nunca debe crear dos órdenes.
 
-### Inventory mutation
-`ReserveStock` and `ReleaseStock` are idempotent by `order_id` and persist enough ledger data to avoid double decrement/replenishment.
+### Mutaciones de Inventory
+`ReserveStock` y `ReleaseStock` son idempotentes por `order_id` y persisten suficiente información en el registro de movimientos para evitar descontar o reponer stock dos veces.
 
-## No stale cache authorization
+## Prohibición de autorizar con caché obsoleta
 
-If Redis is implemented later as an optional bonus, it may cache read-only `GetPart`/list responses. A cached availability value must never be used as the authority to confirm an order. `ReserveStock` always executes against Inventory's transactional database.
+Si Redis se implementa más adelante como bonificación opcional, puede cachear respuestas de solo lectura de `GetPart` o listados. Un valor cacheado de disponibilidad nunca debe utilizarse como autoridad para confirmar una orden. `ReserveStock` siempre se ejecuta contra la base de datos transaccional de Inventory.

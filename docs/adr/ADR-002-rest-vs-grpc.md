@@ -1,28 +1,28 @@
-# ADR-002 - REST externally, unary gRPC internally
+# ADR-002 - REST hacia el exterior y gRPC unary hacia el interior
 
-**Status:** Accepted
+**Estado:** Aceptada
 
-## Context
-The public-facing Sales capability may be used by staff and a future web portal, while Inventory is an internal high-frequency dependency used only by Sales. The assignment explicitly asks for REST outside and gRPC inside, but the choice still must be justified.
+## Contexto
+La capacidad pública de Sales puede ser utilizada por personal de la organización y por un futuro portal web, mientras que Inventory es una dependencia interna de alta frecuencia utilizada únicamente por Sales. El encargo solicita explícitamente REST hacia el exterior y gRPC hacia el interior, pero la elección igualmente debe justificarse.
 
-## Alternatives considered
-1. **REST/JSON for both boundaries.** Operationally simple and easy to inspect, but duplicates HTTP API concerns on the internal path and gives weaker schema/code-generation guarantees than the selected protobuf contract.
-2. **gRPC for both boundaries.** Strong contracts and efficient binary transport everywhere, but browser/public interoperability and manual debugging are less convenient for the public edge.
-3. **REST public + gRPC internal.** Uses a broadly interoperable HTTP/JSON interface at the edge and a strongly typed protobuf RPC interface between services.
+## Alternativas consideradas
+1. **REST/JSON en ambos límites.** Es simple de operar y fácil de inspeccionar, pero duplica preocupaciones propias de una API HTTP en la ruta interna y ofrece garantías de esquema y generación de código más débiles que el contrato protobuf seleccionado.
+2. **gRPC en ambos límites.** Entrega contratos fuertes y transporte binario eficiente en todas partes, pero la interoperabilidad con navegadores y clientes públicos y la depuración manual son menos convenientes en el borde público.
+3. **REST público + gRPC interno.** Usa una interfaz HTTP/JSON ampliamente interoperable en el borde y una interfaz RPC protobuf fuertemente tipada entre servicios.
 
-## Decision
-Expose Sales through a versioned REST/JSON API under `/v1`. Use unary gRPC with Protocol Buffers for Sales-to-Inventory communication.
+## Decisión
+Exponer Sales mediante una API REST/JSON versionada bajo `/v1`. Usar gRPC unary con Protocol Buffers para la comunicación entre Sales e Inventory.
 
-## Justification
-Public consumers benefit from standard HTTP semantics, OpenAPI tooling and easy browser/tool interoperability. Internally, the `.proto` is a compact, language-neutral contract that can generate clients and servers. Every required Inventory operation is request/response, so unary RPC is sufficient; streaming would add complexity without a use case.
+## Justificación
+Los consumidores públicos se benefician de la semántica HTTP estándar, del tooling de OpenAPI y de una interoperabilidad sencilla con navegadores y herramientas. Internamente, el archivo `.proto` es un contrato compacto e independiente del lenguaje que permite generar clientes y servidores. Todas las operaciones requeridas de Inventory siguen un patrón solicitud/respuesta, por lo que RPC unary es suficiente; el streaming añadiría complejidad sin un caso de uso real.
 
-## Cost accepted
-- The system carries two protocol/tooling stacks.
-- Engineers must understand both HTTP status semantics and gRPC status semantics.
-- Error translation at the Sales boundary must be explicit.
+## Costo aceptado
+- El sistema mantiene dos stacks de protocolos y herramientas.
+- Quienes desarrollan el sistema deben comprender tanto la semántica de estados HTTP como la de estados gRPC.
+- La traducción de errores en el límite de Sales debe ser explícita.
 
-## Consequences
-- REST contract: `contracts/rest/openapi.yaml`.
-- gRPC contract: `contracts/grpc/repuestossur/inventory/v1/inventory.proto`.
-- Streaming RPCs are forbidden in v1.
-- Sales owns the translation from gRPC failures to stable public HTTP errors.
+## Consecuencias
+- Contrato REST: `contracts/rest/openapi.yaml`.
+- Contrato gRPC: `contracts/grpc/repuestossur/inventory/v1/inventory.proto`.
+- Los RPC con streaming no están permitidos en v1.
+- Sales es responsable de traducir las fallas gRPC a errores HTTP públicos estables.

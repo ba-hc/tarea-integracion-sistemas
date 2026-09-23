@@ -1,37 +1,37 @@
-# Authentication and authorization contract
+# Contrato de autenticación y autorización
 
-## Mechanism
+## Mecanismo
 
-Public REST requests use:
+Las solicitudes REST públicas utilizan:
 
 ```http
 X-API-Key: <secret>
 ```
 
-`/v1/health` is public. All customer/order operations require a valid key.
+`/v1/health` es público. Todas las operaciones sobre clientes y órdenes requieren una key válida.
 
 ## Roles
 
-| Role | GET | POST |
+| Rol | GET | POST |
 |---|---:|---:|
-| `reader` | yes | no |
-| `operator` | yes | yes |
+| `reader` | sí | no |
+| `operator` | sí | sí |
 
-## Status behavior
+## Comportamiento de estados
 
-- Missing key: `401 UNAUTHORIZED`.
-- Unknown/invalid key: `401 UNAUTHORIZED`.
-- Valid `reader` key on a POST operation: `403 FORBIDDEN`.
-- Valid `operator` key: allowed subject to normal business validation.
+- Key ausente: `401 UNAUTHORIZED`.
+- Key desconocida o inválida: `401 UNAUTHORIZED`.
+- Key `reader` válida en una operación POST: `403 FORBIDDEN`.
+- Key `operator` válida: permitida, sujeta a la validación normal del negocio.
 
-## Security rules
+## Reglas de seguridad
 
-- Keys are supplied through environment/secrets, never committed.
-- Raw keys must not appear in logs, traces, test snapshots or error messages.
-- Compare keys using a constant-time comparison or compare stored hashes.
-- Local Docker may use HTTP; production deployment would require TLS at the ingress/reverse proxy.
-- Logs should identify the key role or non-secret key identifier, not the secret itself.
+- Las keys se entregan mediante variables de entorno o secrets y nunca se versionan en el repositorio.
+- Las keys en texto plano no deben aparecer en logs, trazas, snapshots de pruebas ni mensajes de error.
+- Las keys deben compararse con una comparación de tiempo constante o mediante hashes almacenados.
+- Docker local puede usar HTTP; un despliegue de producción requeriría TLS en el ingress o reverse proxy.
+- Los logs deben identificar el rol de la key o un identificador no secreto, nunca el secreto en sí.
 
-## Context factor for ABET 2
+## Factor de contexto para ABET 2
 
-Security of customer and operational data materially changes the design: authenticated access is mandatory; write privileges are separated from read privileges; secrets are externalized; and sensitive headers are redacted from logs.
+La seguridad de los datos de clientes y de la operación modifica materialmente el diseño: el acceso autenticado es obligatorio; los privilegios de escritura se separan de los de lectura; los secretos se externalizan; y los headers sensibles se eliminan o redactan en los logs.

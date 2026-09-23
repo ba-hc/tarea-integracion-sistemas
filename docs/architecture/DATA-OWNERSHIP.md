@@ -1,64 +1,64 @@
-# Data ownership and persistence baseline
+# Línea base de propiedad de datos y persistencia
 
-## Sales database
+## Base de datos de Sales
 
 ### customers
-- `id` UUID primary key
+- `id` UUID como clave primaria
 - `name` varchar(120)
-- `email` normalized unique value
+- `email` como valor único normalizado
 - `created_at`
 - `updated_at`
 
 ### orders
-- `id` UUID primary key
-- `customer_id` local foreign key
+- `id` UUID como clave primaria
+- `customer_id` como clave foránea local
 - `status` (`CONFIRMED`, `CANCELLED`)
 - `created_at`
 - `updated_at`
 - `cancelled_at` nullable
 
 ### order_items
-- `id` UUID primary key
-- `order_id` local foreign key
-- `part_id` UUID value copied from Inventory (not a DB foreign key)
+- `id` UUID como clave primaria
+- `order_id` como clave foránea local
+- `part_id` como valor UUID copiado desde Inventory (no es una clave foránea de base de datos)
 - `part_sku_snapshot`
 - `part_name_snapshot`
 - `quantity`
 
 ### idempotency_requests
-- `key` unique
+- `key` única
 - `request_hash`
 - `order_id`
 - `state`
-- serialized/fetchable response metadata sufficient for replay
+- metadatos serializados o recuperables de la respuesta suficientes para reproducirla
 - timestamps
 
-## Inventory database
+## Base de datos de Inventory
 
 ### parts
-- `id` UUID primary key
-- `sku` unique
+- `id` UUID como clave primaria
+- `sku` único
 - `name`
-- `stock_available` integer check >= 0
+- `stock_available` entero con restricción >= 0
 - timestamps
 
 ### stock_operations
-- unique logical `order_id`
-- request fingerprint/hash for reservation
-- reserve/release state
+- `order_id` lógico único
+- fingerprint/hash de la solicitud de reserva
+- estado de reserva/liberación
 - timestamps
 
 ### stock_operation_items
-- operation/order reference
-- `part_id` local foreign key
-- quantity
-- stock-before/after evidence as needed
+- referencia a operación/orden
+- `part_id` como clave foránea local
+- cantidad
+- evidencia de stock antes/después según sea necesario
 
-## Invariants
+## Invariantes
 
-1. Only Inventory changes current stock.
-2. Stock never becomes negative.
-3. One order reservation is atomic across all lines.
-4. A successful release cannot be applied twice.
-5. Sales stores historical part snapshots deliberately; these are not used as current Inventory truth.
-6. Cross-service database foreign keys do not exist.
+1. Sólo Inventory modifica el stock actual.
+2. El stock nunca puede ser negativo.
+3. La reserva de una orden es atómica para todas sus líneas.
+4. Una liberación exitosa no puede aplicarse dos veces.
+5. Sales almacena deliberadamente snapshots históricos de las piezas; éstos no se utilizan como fuente de verdad del estado actual de Inventory.
+6. No existen claves foráneas entre bases de datos de servicios distintos.

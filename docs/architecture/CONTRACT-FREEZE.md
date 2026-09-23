@@ -1,51 +1,51 @@
-# Contract freeze procedure
+# Procedimiento de congelamiento de contratos
 
-## Frozen baseline
+## Línea base congelada
 
-The integration baseline is exactly:
+La línea base de integración corresponde exactamente a:
 
 - `contracts/rest/openapi.yaml`
 - `contracts/grpc/repuestossur/inventory/v1/inventory.proto`
 - `contracts/buf.yaml`
-- ADR-001 through ADR-004
-- architecture policies in `docs/architecture/`
+- ADR-001 hasta ADR-004
+- políticas de arquitectura en `docs/architecture/`
 
-After validation and merge to `main`, create:
+Después de validar e integrar a `main`, crear:
 
 ```bash
-git tag -a contracts-v1.0.0 -m "Freeze RepuestosSur REST and gRPC contracts v1.0.0"
+git tag -a contracts-v1.0.0 -m "Congelar contratos REST y gRPC de RepuestosSur v1.0.0"
 git push origin contracts-v1.0.0
 ```
 
-## Freeze rule
+## Regla de congelamiento
 
-After `contracts-v1.0.0`, implementation work MUST consume these contracts as immutable inputs. A contract must not be edited casually to make an implementation easier.
+Después de `contracts-v1.0.0`, el trabajo de implementación DEBE consumir estos contratos como entradas inmutables. Un contrato no debe editarse de forma casual para facilitar una implementación.
 
-### Compatible change
+### Cambio compatible
 
-Requires a dedicated `contract:` PR that:
+Requiere un PR dedicado con prefijo `contract:` que:
 
-- explains why the change is required,
-- updates affected contract tests/documentation,
-- demonstrates compatibility with existing consumers.
+- explique por qué se necesita el cambio;
+- actualice las pruebas y documentación de contrato afectadas;
+- demuestre compatibilidad con los consumidores existentes.
 
-### Breaking change
+### Cambio incompatible
 
-Requires:
+Requiere:
 
-- a new major API/package (`/v2` or `inventory.v2`),
-- migration notes,
-- all affected tests updated deliberately,
-- a new contract tag.
+- una nueva versión mayor de API/package (`/v2` o `inventory.v2`);
+- notas de migración;
+- todas las pruebas afectadas actualizadas deliberadamente;
+- un nuevo tag de contratos.
 
-## Required gates before tagging
+## Controles requeridos antes de crear el tag
 
 ```bash
-# protobuf style and compilation
+# estilo y compilación de protobuf
 buf lint contracts/grpc
 
-# after the baseline exists, future PRs also run:
+# una vez que exista la línea base, los PR futuros también ejecutan:
 buf breaking contracts/grpc --against '.git#tag=contracts-v1.0.0,subdir=contracts/grpc'
 ```
 
-CI should also validate `contracts/rest/openapi.yaml` with an OpenAPI 3.1-compatible validator and may use an OpenAPI diff tool to reject breaking REST changes against the frozen tag.
+CI también debe validar `contracts/rest/openapi.yaml` con un validador compatible con OpenAPI 3.1 y puede usar una herramienta de diff de OpenAPI para rechazar cambios REST incompatibles respecto del tag congelado.
