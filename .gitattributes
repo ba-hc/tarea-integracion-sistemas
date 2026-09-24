@@ -1,0 +1,4 @@
+# Los scripts de shell conservan finales de linea LF aunque se clonen en
+# Windows con core.autocrlf=true. Con CRLF fallan en Linux y en Git Bash
+# con "$'\r': command not found".
+*.sh text eol=lf
