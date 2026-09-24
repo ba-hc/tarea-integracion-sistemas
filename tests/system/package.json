@@ -1,0 +1,16 @@
+{
+  "name": "@repuestossur/tests-system",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Suite de sistema black-box de RepuestosSur (RS-401)",
+  "scripts": {
+    "test": "vitest run --no-file-parallelism --testTimeout=30000",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}
