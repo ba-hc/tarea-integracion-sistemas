@@ -44,7 +44,7 @@ curl -sS -f "$SALES_BASE_URL/v1/health" >/dev/null \
   || die "Sales no responde en $SALES_BASE_URL/v1/health; levanta el stack primero"
 
 echo "==> Preparando el proxy de Inventory"
-./scripts/toxic.sh ensure
+bash scripts/toxic.sh ensure
 
 # Cliente dedicado del experimento. Se crea aqui para no depender del seed de
 # Sales; el email lleva timestamp porque es unico por contrato.
@@ -79,7 +79,7 @@ run_k6() {
 
 for latency in $LATENCIES; do
   echo "==> Condicion: ${latency} ms de latencia inyectada"
-  ./scripts/toxic.sh set "$latency"
+  bash scripts/toxic.sh set "$latency"
 
   for rep in $(seq 1 "$REPS"); do
     run_id=$(printf 'd%s_l%05d_r%s' "$DEADLINE_MS" "$latency" "$rep")
@@ -94,14 +94,14 @@ for latency in $LATENCIES; do
     # no mide lo que creemos que mide, asi que se corta en vez de guardarla.
     conflicts=$(cut -d, -f9 "$RUNS_DIR/$run_id.csv")
     if [ "${conflicts:-0}" -gt 0 ]; then
-      ./scripts/toxic.sh clear
+      bash scripts/toxic.sh clear
       die "la corrida $run_id devolvio $conflicts respuestas 409. Resiembra el stock de $EXPERIMENT_PART_ID y repite el brazo; los resultados parciales quedan en $RUNS_DIR"
     fi
   done
 done
 
 echo "==> Limpiando el toxic"
-./scripts/toxic.sh clear
+bash scripts/toxic.sh clear
 
 echo "==> Consolidando $SUMMARY_CSV"
 {

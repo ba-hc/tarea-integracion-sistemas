@@ -84,11 +84,11 @@ export EXPERIMENT_PART_ID=<uuid de la pieza sembrada>
 
 # Brazo 1 - con deadline (el comportamiento congelado)
 INVENTORY_RPC_DEADLINE_MS=800 docker compose --profile experiment up -d --build
-DEADLINE_MS=800 ./scripts/run.sh
+DEADLINE_MS=800 bash scripts/run.sh
 
 # Brazo 2 - linea base sin deadline efectivo
 INVENTORY_RPC_DEADLINE_MS=60000 docker compose --profile experiment up -d --force-recreate sales-api
-DEADLINE_MS=60000 ./scripts/run.sh
+DEADLINE_MS=60000 bash scripts/run.sh
 ```
 
 `run.sh` regenera `results/summary.csv` con todas las corridas acumuladas en `results/runs/`,
@@ -100,7 +100,7 @@ Variables opcionales: `LATENCIES` (default `0 250 500 750 1000 1500`), `REPS` (`
 Para una prueba de humo rápida antes del barrido real:
 
 ```bash
-LATENCIES="0 1000" REPS=1 DURATION=10s DEADLINE_MS=800 ./scripts/run.sh
+LATENCIES="0 1000" REPS=1 DURATION=10s DEADLINE_MS=800 bash scripts/run.sh
 ```
 
 ## Resultados
