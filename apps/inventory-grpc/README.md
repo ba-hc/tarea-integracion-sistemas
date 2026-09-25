@@ -26,9 +26,11 @@ src/
   main.ts                arranque del microservicio gRPC
   app.module.ts          módulo raíz; recibe la configuración ya validada
   config/                lectura y validación de variables de entorno
-  grpc/                  opciones del servidor, tipos del .proto, Timestamp, filtro de errores
+  grpc/                  opciones del servidor (health + reflection), tipos del .proto, Timestamp, errores
   parts/                 GetPart / ListParts (controller, service, mapper)
   stock/                 ReserveStock / ReleaseStock (validación, huella, transacción, mapper)
+  health/                grpc.health.v1 ligado a la base + probe para el HEALTHCHECK de Docker
+  logging/               logger JSON, interceptor por llamada, borrado de credenciales
   prisma/                PrismaService (una sola instancia y pool por proceso)
   common/                errores de dominio y validación de UUID
 test/
@@ -43,11 +45,17 @@ test/
 | `DATABASE_URL` | sí | - | PostgreSQL **propio** de Inventory |
 | `GRPC_HOST` | no | `0.0.0.0` | interfaz de escucha |
 | `GRPC_PORT` | no | `50051` | puerto gRPC |
-| `INVENTORY_PROTO_PATH` | no | `../../contracts/grpc/repuestossur/inventory/v1/inventory.proto` | ruta al contrato, relativa al directorio del servicio |
+| `INVENTORY_PROTO_PATH` | no | `../../contracts/grpc/repuestossur/inventory/v1/inventory.proto` | ruta al contrato, relativa al directorio del servicio; debe existir |
+| `LOG_FORMAT` | no | `json` | `json` (una línea por evento) o `text` |
+| `LOG_LEVEL` | no | `log` | `fatal`, `error`, `warn`, `log`, `debug`, `verbose` |
+| `GRPC_REFLECTION` | no | `true` | expone `grpc.reflection` (grpcurl) |
+| `HEALTH_CHECK_INTERVAL_MS` | no | `5000` | cada cuánto el health check prueba la base (500..60000) |
+| `SHUTDOWN_TIMEOUT_MS` | no | `8000` | tope del apagado ordenado antes de forzar la salida (1000..60000) |
 | `SEED_ON_START` | no | `true` (sólo en Docker) | cargar las piezas faltantes al arrancar el contenedor |
 | `TEST_DATABASE_URL` | sólo pruebas de integración | - | base desechable; su nombre debe contener `test` |
 
-Ver [`.env.example`](.env.example).
+Ver [`.env.example`](.env.example). Una variable inválida detiene el arranque con un mensaje
+claro (sin mostrar la `DATABASE_URL`), en vez de fallar a mitad de una llamada.
 
 ## Desarrollo local
 
@@ -103,7 +111,7 @@ reproducir exactamente cualquier respuesta. Una reserva fallida no deja rastro n
 
 ## Seed
 
-El catálogo tiene 22 piezas con UUID y SKU fijos, así Sales, las pruebas de sistema,
+El catálogo tiene 23 piezas con UUID y SKU fijos, así Sales, las pruebas de sistema,
 la demo y el experimento usan los mismos identificadores en cualquier máquina.
 
 - `npm run db:seed` inserta sólo las piezas que faltan. Es seguro repetirlo y nunca
@@ -118,6 +126,7 @@ Piezas con uso especial:
 | demo de stock insuficiente | `EMB-KIT-020` | `74199389-6b4e-43f2-96b2-c2a4ab3959bc` | 0 |
 | demo de stock insuficiente | `ESC-SIL-021` | `f989e963-a0fb-4799-80e8-1aeff10629be` | 0 |
 | stock bajo | `ELE-ALT-018` | `5bb2c044-90eb-4e4c-83ec-2815f25d3b0b` | 1 |
+| pruebas de sistema RS-401 (`PART_WITH_STOCK`) | `SYS-TEST-000` | `e58e2904-9db7-4c8d-8f36-7107e863a268` | 5 |
 | experimento RS-402 (`EXPERIMENT_PART_ID`) | `EXP-TIMEOUT-000` | `0be383fa-f9d8-4eb9-87ec-2e528faf83eb` | 50000 |
 
 ## Errores gRPC
@@ -131,7 +140,10 @@ según [ERROR-MAPPING.md](../../docs/architecture/ERROR-MAPPING.md):
 | pieza inexistente (`GetPart` o alguna línea de `ReserveStock`) | `NOT_FOUND` |
 | stock insuficiente en alguna línea | `FAILED_PRECONDITION` |
 | mismo `order_id` con otro payload de reserva | `ALREADY_EXISTS` |
-| cualquier error inesperado (BD, bug) | `INTERNAL` con mensaje genérico; el detalle sólo va al log |
+| cualquier error inesperado (BD, bug) | `INTERNAL` con mensaje `Internal error`; el detalle sólo va al log |
+
+Nunca llegan al llamador SQL, errores de Prisma ni stacks: lo verifica
+`test/integration/grpc-operability.spec.ts` rompiendo la base con el servicio en marcha.
 
 **Provisorio** (ERROR-MAPPING.md no define estos casos; pendiente de acordar con Sales):
 
@@ -139,6 +151,48 @@ según [ERROR-MAPPING.md](../../docs/architecture/ERROR-MAPPING.md):
 |---|---|
 | `ReleaseStock` de un `order_id` sin reserva | `NOT_FOUND` |
 | `ReserveStock` de un `order_id` ya liberado (mismo payload) | `FAILED_PRECONDITION`, sin mutar stock |
+
+## Operación
+
+### Health check
+
+El servidor expone el estándar `grpc.health.v1.Health` para `""` (el servidor) y para
+`repuestossur.inventory.v1.InventoryService`. Refleja la disponibilidad real:
+
+- arranca en `NOT_SERVING` y pasa a `SERVING` cuando `SELECT 1` contra la base responde;
+- se vuelve a comprobar cada `HEALTH_CHECK_INTERVAL_MS` (con tope de 2 s por sondeo): si la base
+  cae, pasa a `NOT_SERVING` y vuelve a `SERVING` sola cuando la base regresa;
+- al empezar el apagado pasa a `NOT_SERVING` antes de cerrar.
+
+El proceso arranca aunque la base todavía no esté disponible; el health check lo informa.
+La imagen Docker lo usa como `HEALTHCHECK` (`node dist/src/health/health-probe.js`), así
+Compose puede esperar a Inventory con `condition: service_healthy`.
+
+```bash
+grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
+grpcurl -plaintext localhost:50051 list            # requiere GRPC_REFLECTION=true
+```
+
+### Logs
+
+Con `LOG_FORMAT=json` cada evento es una línea JSON. Cada llamada gRPC deja una línea con
+`method`, `code` (código gRPC), `durationMs`, `traceId` e ids de negocio (`orderId`, `partId`,
+`itemCount`), nunca el payload completo:
+
+```json
+{"level":"log","message":"grpc call completed","context":"GrpcCall","method":"GetPart","code":"OK","durationMs":31.3,"traceId":"demo-trace-001","partId":"e58e2904-..."}
+```
+
+Si el llamador envía la metadata gRPC `x-trace-id` (p. ej. Sales con el `traceId` de la
+solicitud REST), ese valor aparece como `traceId`; si no, se genera uno. Esta metadata es
+opcional y no forma parte del `.proto`. Los errores inesperados se registran con su stack y el
+mismo `traceId`, con las credenciales de URLs borradas (`postgresql://***@host`).
+
+### Apagado ordenado
+
+Ante `SIGTERM` (`docker stop`) o `SIGINT`: health → `NOT_SERVING`, el servidor deja de aceptar
+llamadas nuevas y espera las que están en curso, se cierra el pool de Prisma y el proceso
+termina con código 0. Si algo se cuelga, sale con código 1 al cumplirse `SHUTDOWN_TIMEOUT_MS`.
 
 ## Docker
 
@@ -152,5 +206,20 @@ docker run --rm -p 50051:50051 \
 ```
 
 Al arrancar, el contenedor aplica las migraciones pendientes (`prisma migrate deploy`), carga
-las piezas faltantes y queda escuchando. `docker stop` cierra el servidor y el pool de
-conexiones de forma ordenada.
+las piezas faltantes y queda escuchando, con logs JSON y `HEALTHCHECK`. `docker stop` lo cierra
+de forma ordenada (código de salida 0).
+
+Para Compose (RS-102), el servicio se llama `inventory-grpc` en las pruebas de sistema; una
+definición mínima:
+
+```yaml
+inventory-grpc:
+  build:
+    context: .
+    dockerfile: apps/inventory-grpc/Dockerfile
+  environment:
+    DATABASE_URL: postgresql://inventory:${INVENTORY_DB_PASSWORD}@inventory-db:5432/inventory
+  depends_on:
+    inventory-db:
+      condition: service_healthy
+```

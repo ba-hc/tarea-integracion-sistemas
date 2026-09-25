@@ -24,6 +24,7 @@ FROM base AS runtime
 ENV NODE_ENV=production \
     GRPC_HOST=0.0.0.0 \
     GRPC_PORT=50051 \
+    LOG_FORMAT=json \
     SEED_ON_START=true
 # Misma estructura que el repo: la ruta por defecto al .proto
 # (../../contracts/...) funciona sin configuración extra.
@@ -34,6 +35,15 @@ COPY --from=build /repo/apps/inventory-grpc/prisma ./prisma
 COPY --from=build /repo/apps/inventory-grpc/dist ./dist
 USER node
 EXPOSE 50051
+# grpc.health.v1: sano sólo si el servidor responde SERVING, es decir, si la
+# base de Inventory está disponible. Compose puede usarlo con
+# `depends_on: { inventory-grpc: { condition: service_healthy } }`.
+# start-period cubre migraciones y seed del primer arranque.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
+  CMD ["node", "dist/src/health/health-probe.js"]
+# docker stop envía SIGTERM; main.ts cierra ordenadamente antes de
+# SHUTDOWN_TIMEOUT_MS (8 s), dentro de los 10 s que Docker espera antes de SIGKILL.
+STOPSIGNAL SIGTERM
 # Al arrancar: 1) aplica migraciones pendientes, 2) inserta las piezas del seed
 # que falten (nunca pisa stock existente), 3) reemplaza el shell por node
 # (exec) para que reciba SIGTERM directamente y cierre de forma ordenada.
