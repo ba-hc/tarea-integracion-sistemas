@@ -29,7 +29,7 @@ Si el código contradice estas fuentes, prevalece el contrato o la decisión arq
 
 ## 3. Línea base congelada
 
-El tag previsto para la línea base es:
+El tag publicado para la línea base es:
 
 ```text
 contracts-v1.0.0

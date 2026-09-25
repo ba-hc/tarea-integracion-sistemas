@@ -53,7 +53,9 @@ export async function request<T = any>(
   path: string,
   options: RequestOptions = {}
 ): Promise<ApiResponse<T>> {
-  const headers: Record<string, string> = {};
+  // The resilience suite restarts Inventory between requests; don't reuse a
+  // keep-alive socket that may have expired while the stack recovers.
+  const headers: Record<string, string> = { Connection: 'close' };
   if (options.apiKey !== undefined) headers['X-API-Key'] = options.apiKey;
   if (options.idempotencyKey !== undefined) headers['Idempotency-Key'] = options.idempotencyKey;
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';

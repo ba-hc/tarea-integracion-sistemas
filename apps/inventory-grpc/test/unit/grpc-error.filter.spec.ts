@@ -19,8 +19,8 @@ describe('toGrpcError', () => {
     ['PartsNotFoundError', new PartsNotFoundError(['p1', 'p2']), GrpcStatus.NOT_FOUND],
     ['InsufficientStockError', new InsufficientStockError([{ partId: 'p1', requested: 3, available: 1 }]), GrpcStatus.FAILED_PRECONDITION],
     ['OrderIdConflictError', new OrderIdConflictError('o1'), GrpcStatus.ALREADY_EXISTS],
-    ['ReservationNotFoundError (provisorio)', new ReservationNotFoundError('o1'), GrpcStatus.NOT_FOUND],
-    ['ReservationAlreadyReleasedError (provisorio)', new ReservationAlreadyReleasedError('o1'), GrpcStatus.FAILED_PRECONDITION],
+    ['ReservationNotFoundError', new ReservationNotFoundError('o1'), GrpcStatus.NOT_FOUND],
+    ['ReservationAlreadyReleasedError', new ReservationAlreadyReleasedError('o1'), GrpcStatus.FAILED_PRECONDITION],
   ])('traduce %s según ERROR-MAPPING.md', (_label, error, code) => {
     expect(toGrpcError(error)).toEqual({ code, message: error.message });
   });

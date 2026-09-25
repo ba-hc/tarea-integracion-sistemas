@@ -231,8 +231,7 @@ describe('InventoryService gRPC: ReserveStock / ReleaseStock', () => {
       await expect(release('nope')).rejects.toMatchObject({ code: grpc.status.INVALID_ARGUMENT });
     });
 
-    // Casos no definidos en ERROR-MAPPING.md: comportamiento PROVISORIO.
-    describe('casos no definidos por el contrato (provisorio)', () => {
+    describe('estados terminales de la reserva', () => {
       it('order_id sin reserva -> NOT_FOUND', async () => {
         await expect(release(randomUUID())).rejects.toMatchObject({ code: grpc.status.NOT_FOUND });
       });

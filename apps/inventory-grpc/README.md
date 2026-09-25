@@ -145,12 +145,12 @@ según [ERROR-MAPPING.md](../../docs/architecture/ERROR-MAPPING.md):
 Nunca llegan al llamador SQL, errores de Prisma ni stacks: lo verifica
 `test/integration/grpc-operability.spec.ts` rompiendo la base con el servicio en marcha.
 
-**Provisorio** (ERROR-MAPPING.md no define estos casos; pendiente de acordar con Sales):
+Los estados terminales de reserva por `order_id` son:
 
-| Condición | Estado actual |
+| Condición | Estado |
 |---|---|
-| `ReleaseStock` de un `order_id` sin reserva | `NOT_FOUND` |
-| `ReserveStock` de un `order_id` ya liberado (mismo payload) | `FAILED_PRECONDITION`, sin mutar stock |
+| `ReleaseStock` de un `order_id` que nunca tuvo una reserva | `NOT_FOUND` |
+| `ReserveStock` de un `order_id` cuya reserva ya fue liberada (mismo payload) | `FAILED_PRECONDITION`, sin mutar stock |
 
 ## Operación
 

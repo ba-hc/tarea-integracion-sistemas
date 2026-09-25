@@ -34,22 +34,32 @@
 
 | Condición en Inventory | Estado gRPC |
 |---|---|
-| UUID mal formado, items vacíos, cantidad inválida o pieza duplicada en la solicitud | `INVALID_ARGUMENT` |
-| pieza solicitada inexistente | `NOT_FOUND` |
-| stock insuficiente | `FAILED_PRECONDITION` |
+| UUID mal formado en `GetPart`, `ReserveStock` o `ReleaseStock`; items vacíos, cantidad inválida o pieza duplicada en `ReserveStock` | `INVALID_ARGUMENT` |
+| pieza solicitada inexistente en `GetPart` o `ReserveStock` | `NOT_FOUND` |
+| `ReleaseStock` con un `order_id` que nunca tuvo una reserva | `NOT_FOUND` |
+| stock insuficiente en una reserva | `FAILED_PRECONDITION` |
+| `ReserveStock` con un `order_id` cuya reserva ya fue liberada (mismo payload) | `FAILED_PRECONDITION`; no cambia el stock |
 | mismo `order_id` reutilizado con un payload de reserva distinto | `ALREADY_EXISTS` |
 | error inesperado de base de datos o servidor | `INTERNAL` |
 | servidor o red no disponible | `UNAVAILABLE` |
 | deadline del llamador excedido | `DEADLINE_EXCEEDED` |
 
-## Traducción de Sales para llamadas que mutan órdenes
+`ReserveStock` conserva la reserva ya liberada como estado terminal: no vuelve a descontar stock. El `order_id` lo genera Sales; la creación pública normal no reutiliza un id de orden cancelada.
 
-| gRPC | HTTP | Código público |
-|---|---:|---|
-| `INVALID_ARGUMENT` | 400 | `VALIDATION_ERROR` |
-| `NOT_FOUND` | 422 | `PART_NOT_FOUND` |
-| `FAILED_PRECONDITION` | 409 | `INSUFFICIENT_STOCK` |
-| `ALREADY_EXISTS` por inconsistencia interna de `order_id` | 500 | `INTERNAL_ERROR` |
-| `UNAVAILABLE` | 503 | `INVENTORY_UNAVAILABLE` |
-| `DEADLINE_EXCEEDED` | 504 | `INVENTORY_TIMEOUT` |
-| `INTERNAL` / `UNKNOWN` | 500 | `INTERNAL_ERROR` |
+## Traducción de Sales por operación
+
+| Operación de Inventory | Estado gRPC | HTTP | Código público |
+|---|---|---:|---|
+| `GetPart`, `ReserveStock` | `INVALID_ARGUMENT` | 400 | `VALIDATION_ERROR` |
+| `GetPart`, `ReserveStock` ante una pieza inexistente | `NOT_FOUND` | 422 | `PART_NOT_FOUND` |
+| `ReserveStock` por falta de stock o reserva ya liberada | `FAILED_PRECONDITION` | 409 | `INSUFFICIENT_STOCK` |
+| `ReserveStock` | `ALREADY_EXISTS` por payload distinto para el `order_id` | 500 | `INTERNAL_ERROR` |
+| `ReleaseStock` ante una reserva inexistente o ya liberada | `NOT_FOUND` / `FAILED_PRECONDITION` | 500 | `INTERNAL_ERROR` |
+| `ReleaseStock` ante cualquier otro rechazo inesperado del `order_id` interno | `INVALID_ARGUMENT` | 500 | `INTERNAL_ERROR` |
+| cualquier RPC | `UNAVAILABLE` | 503 | `INVENTORY_UNAVAILABLE` |
+| cualquier RPC | `DEADLINE_EXCEEDED` | 504 | `INVENTORY_TIMEOUT` |
+| cualquier RPC | `INTERNAL` / `UNKNOWN` | 500 | `INTERNAL_ERROR` |
+
+Sales traduce los errores de `ReleaseStock` a `INTERNAL_ERROR`: el identificador y la reserva provienen de una orden ya persistida por Sales, por lo que su ausencia o estado incompatible indica una inconsistencia entre servicios, no un error del cliente.
+
+Sales traduce por operación y estado gRPC, no por el mensaje interno. La reserva ya liberada sólo es un guard de estado interno: el `order_id` no lo elige el cliente y la creación pública normal no reutiliza el id de una orden cancelada.
