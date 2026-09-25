@@ -7,6 +7,7 @@ import {
   expectStatus,
   newIdempotencyKey,
   operatorKey,
+  readerKey,
   partStock,
   partUnknown,
   partWithStock,
@@ -93,6 +94,56 @@ describe('Ordenes: ciclo de stock', () => {
   });
 });
 
+
+describe('Ordenes: consultas publicas', () => {
+  let customerId: string;
+  let orderId: string;
+
+  beforeAll(async () => {
+    customerId = (await createCustomer()).id;
+    const created = await createOrder(customerId, partWithStock());
+    expectStatus(created, 201, 'crear una orden para consultar');
+    orderId = created.body.id;
+  });
+
+  afterAll(async () => {
+    if (orderId) await cancelOrder(orderId);
+  });
+
+  it('obtiene una orden con sus snapshots por id', async () => {
+    const response = await request('GET', `/v1/orders/${orderId}`, { apiKey: readerKey() });
+    expectStatus(response, 200, 'consultar una orden por id');
+    expect(response.body.id).toBe(orderId);
+    expect(response.body.status).toBe('CONFIRMED');
+    expect(response.body.items[0]).toMatchObject({ partId: partWithStock(), quantity: 1 });
+    expect(typeof response.body.items[0].sku).toBe('string');
+    expect(typeof response.body.items[0].name).toBe('string');
+  });
+
+  it('lista ordenes con paginacion y filtros', async () => {
+    const porDefecto = await request('GET', '/v1/orders', { apiKey: readerKey() });
+    expectStatus(porDefecto, 200, 'listar ordenes sin paginacion explicita');
+    expect(porDefecto.body.page).toBe(1);
+    expect(porDefecto.body.pageSize).toBe(20);
+
+    const response = await request(
+      'GET',
+      `/v1/orders?page=1&pageSize=10&status=CONFIRMED&customerId=${customerId}`,
+      { apiKey: readerKey() }
+    );
+    expectStatus(response, 200, 'listar ordenes de un cliente');
+    expect(response.body.page).toBe(1);
+    expect(response.body.pageSize).toBe(10);
+    expect(response.body.items.some((item: { id: string }) => item.id === orderId)).toBe(true);
+  });
+
+  it('devuelve 404 al consultar una orden inexistente', async () => {
+    const response = await request('GET', '/v1/orders/00000000-0000-4000-8000-0000000000cc', {
+      apiKey: readerKey(),
+    });
+    expectError(response, 404, 'ORDER_NOT_FOUND', 'consultar una orden inexistente');
+  });
+});
 describe('Ordenes: idempotencia', () => {
   let customerId: string;
   const creadas: string[] = [];
@@ -112,10 +163,14 @@ describe('Ordenes: idempotencia', () => {
 
     const primera = await createOrder(customerId, partWithStock(), 1, key);
     expectStatus(primera, 201, 'primera orden con Idempotency-Key');
+    expect(primera.headers.get('location')).toContain(primera.body.id);
+    expect(primera.headers.get('x-trace-id')).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(primera.headers.get('idempotency-replayed')).toBe('false');
     creadas.push(primera.body.id);
 
     const reintento = await createOrder(customerId, partWithStock(), 1, key);
     expectStatus(reintento, 201, 'reintento con la misma Idempotency-Key y el mismo payload');
+    expect(reintento.headers.get('idempotency-replayed')).toBe('true');
     expect(reintento.body.id).toBe(primera.body.id);
   });
 
@@ -134,6 +189,22 @@ describe('Ordenes: idempotencia', () => {
       'reusar la Idempotency-Key con un payload distinto'
     );
   });
+  it('serializa reintentos concurrentes con la misma key', async () => {
+    const key = newIdempotencyKey();
+    const [primera, segunda] = await Promise.all([
+      createOrder(customerId, partWithStock(), 1, key),
+      createOrder(customerId, partWithStock(), 1, key),
+    ]);
+    expectStatus(primera, 201, 'primera solicitud concurrente con Idempotency-Key');
+    expectStatus(segunda, 201, 'segunda solicitud concurrente con Idempotency-Key');
+    expect(segunda.body.id).toBe(primera.body.id);
+    creadas.push(primera.body.id);
+
+    const replay = await createOrder(customerId, partWithStock(), 1, key);
+    expectStatus(replay, 201, 'reintento despues de completar las solicitudes concurrentes');
+    expect(replay.body.id).toBe(primera.body.id);
+    expect(replay.headers.get('idempotency-replayed')).toBe('true');
+  });
 });
 
 describe('Ordenes: validacion y referencias', () => {
@@ -147,6 +218,14 @@ describe('Ordenes: validacion y referencias', () => {
   it('rechaza una cantidad invalida con 400', async () => {
     const response = await createOrder(customerId, partWithStock(), 0);
     expectError(response, 400, 'VALIDATION_ERROR', 'orden con quantity=0');
+  });
+
+  it('requiere Idempotency-Key para crear ordenes', async () => {
+    const response = await request('POST', '/v1/orders', {
+      apiKey: operatorKey(),
+      body: { customerId, items: [{ partId: partWithStock(), quantity: 1 }] },
+    });
+    expectError(response, 400, 'VALIDATION_ERROR', 'crear una orden sin Idempotency-Key');
   });
 
   it('rechaza ids de pieza repetidos en la misma orden con 400', async () => {

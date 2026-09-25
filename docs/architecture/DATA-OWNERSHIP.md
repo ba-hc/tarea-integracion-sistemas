@@ -29,7 +29,7 @@
 - `key` única
 - `request_hash`
 - `order_id`
-- `state`
+- `state` (`IN_PROGRESS`, `COMPENSATING`, `CONFIRMED`, `FAILED`)
 - metadatos serializados o recuperables de la respuesta suficientes para reproducirla
 - timestamps
 

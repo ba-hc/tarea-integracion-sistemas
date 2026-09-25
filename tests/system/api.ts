@@ -112,6 +112,9 @@ export function expectError(
   if (!response.body?.traceId) {
     throw new Error(`${context}: el error no trae 'traceId'. Cuerpo: ${describeBody(response.body)}`);
   }
+  if (response.headers.get('x-trace-id') !== response.body.traceId) {
+    throw new Error(`${context}: X-Trace-Id no coincide con traceId. Cuerpo: ${describeBody(response.body)}`);
+  }
 }
 
 export async function createCustomer(name = 'Cliente E2E'): Promise<any> {

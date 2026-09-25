@@ -22,17 +22,18 @@ La creación y la cancelación de órdenes dependen sincrónicamente de Inventor
 
 ## Compensación al crear una orden
 1. Sales crea un registro de idempotencia y un `order_id` UUID estable.
-2. Sales llama a `ReserveStock(order_id, items)`.
-3. Si la reserva falla, no se escribe ninguna orden confirmada.
-4. Si la reserva tiene éxito pero falla la persistencia local de la orden, Sales llama a `ReleaseStock(order_id)` como compensación y registra cualquier falla de compensación como un incidente crítico de consistencia.
+2. Sales llama a `ReserveStock(order_id, items)`. Un timeout, error de transporte o 5xx conserva la key en estado recuperable porque la reserva pudo confirmarse antes de perder la respuesta.
+3. Tras una reserva exitosa, Sales guarda la orden, sus snapshots y la respuesta original dentro de su transacción local.
+4. Si falla la persistencia local, Sales persiste `COMPENSATING` antes de liberar stock; los retries con la misma key completan el release idempotente bajo el lock de la key y conservan un resultado estable.
+5. Si se pierde el ACK de commit local, Sales vuelve a leer la key. Si la orden está confirmada, reproduce la respuesta original y no libera stock.
 
 ## Cancelación
-`ReleaseStock(order_id)` se invoca antes de cambiar la orden local a `CANCELLED`. Repetir una cancelación devuelve la orden ya cancelada y no repone el stock una segunda vez.
+`ReleaseStock(order_id)` se invoca antes de cambiar la orden local a `CANCELLED`. Si la liberación tiene éxito pero falla la actualización local, un retry de cancelación repite el release idempotente y completa el estado local sin reponer stock dos veces.
 
 ## Costo aceptado
 - Una llamada lenta a Inventory que supere los 800 ms falla aunque eventualmente pudiera haber respondido.
-- Sin retries automáticos, las fallas transitorias son más visibles para los consumidores.
-- Permanece una ventana poco frecuente de falla de compensación porque el sistema evita deliberadamente un coordinador de transacciones distribuidas.
+- No existen retries automáticos; el consumidor debe reintentar una respuesta ambigua con la misma `Idempotency-Key` o repetir una cancelación fallida.
+- No hay coordinador distribuido ni worker de recuperación: `COMPENSATING` permanece durable y se completa en el siguiente retry si el proceso o la base de datos fallan durante la compensación.
 
 ## Consecuencias
 - El experimento ABET varía la latencia inyectada de Inventory alrededor del límite de 800 ms.

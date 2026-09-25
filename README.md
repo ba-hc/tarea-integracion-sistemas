@@ -38,7 +38,7 @@ Inventory Service -----------> Inventory PostgreSQL
 - Vitest
 - k6 + Toxiproxy para experimentación de resiliencia
 
-Las versiones exactas de dependencias de aplicación deben quedar fijadas por el lockfile cuando se inicialicen los servicios.
+Las versiones exactas de dependencias de aplicación quedan fijadas en los lockfiles de cada servicio.
 
 ## Fuentes autoritativas
 
@@ -71,10 +71,34 @@ Después de congelar esa línea base, los cambios a `openapi.yaml` o `inventory.
 - `ADR-003`: versionado y evolución de contratos.
 - `ADR-004`: resiliencia y modos de falla.
 
-## Estado actual
+## Ejecución local
 
-Este repositorio comienza con los contratos y decisiones de arquitectura preparados para que la implementación pueda avanzar sin redefinir interfaces durante el desarrollo.
+Node.js 24 y Docker Compose v2 son necesarios.
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Sales queda disponible en `http://localhost:3000`; `/v1/health` es público. Las claves
+locales están declaradas en `.env.example` sólo para la demo. Sustitúyelas antes de usar
+el sistema fuera de una máquina de desarrollo. La API, autenticación y errores se describen
+en [OpenAPI](contracts/rest/openapi.yaml); la base de datos de Sales es independiente de
+Inventory.
+
+Compose monta PostgreSQL 18 en `/var/lib/postgresql` y usa volúmenes versionados
+(`sales-data-v18`, `inventory-data-v18`). Los volúmenes antiguos `sales-data` e
+`inventory-data` se conservan sin montarse; Compose no migra automáticamente bases de datos
+anteriores. Haz backup y una migración explícita antes de reutilizar datos existentes.
+
+La suite HTTP black-box está en [`tests/system`](tests/system/README.md). Pruebas unitarias
+y la integración PostgreSQL de Sales se ejecutan desde `apps/sales-api`; el método, los
+resultados de resiliencia y el guion de demostración están en [`experiments/timeout`](experiments/timeout/README.md)
+y [`docs/report/DEMO.md`](docs/report/DEMO.md).
 
 ## Uso de asistentes de IA
 
-El proyecto puede utilizar asistentes de IA como apoyo para análisis, documentación, generación de borradores de código y revisión. Todo contenido incorporado al repositorio debe ser revisado, probado y comprendido por quienes lo presenten. Esta sección se actualizará antes de la entrega final con las herramientas efectivamente utilizadas, su propósito y las verificaciones realizadas.
+En esta iteración se utilizó un asistente de IA para revisar los contratos, implementar la
+Sales REST API y apoyar la documentación. La implementación se comprobó con typecheck/build,
+pruebas unitarias, integración PostgreSQL y la suite black-box; el informe RS-402 conserva la
+evidencia empírica. Quienes entreguen el proyecto deben revisar y comprender estos cambios.

@@ -21,6 +21,7 @@ describe('Clientes', () => {
     expect(response.body.email).toBe(email);
     // El contrato exige el header pero no fija si es ruta relativa o absoluta.
     expect(response.headers.get('location')).toContain(response.body.id);
+    expect(response.headers.get('x-trace-id')).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
   it('consulta un cliente por id', async () => {

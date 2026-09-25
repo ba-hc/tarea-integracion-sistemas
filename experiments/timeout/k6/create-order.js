@@ -12,7 +12,7 @@ const API_KEY = __ENV.SALES_API_KEY;
 const PART_ID = __ENV.EXPERIMENT_PART_ID;
 const CUSTOMER_ID = __ENV.EXPERIMENT_CUSTOMER_ID;
 
-const RATE = Number(__ENV.RATE || 20);
+const RATE = Number(__ENV.RATE || 5);
 const DURATION = __ENV.DURATION || '30s';
 
 if (!BASE_URL || !API_KEY || !PART_ID || !CUSTOMER_ID) {

@@ -1,0 +1,47 @@
+{
+  "name": "@repuestossur/sales-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "1.14.5",
+    "@grpc/proto-loader": "0.8.1",
+    "@nestjs/common": "12.1.0",
+    "@nestjs/core": "12.1.0",
+    "@nestjs/platform-express": "12.1.0",
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "class-transformer": "0.5.1",
+    "class-validator": "0.14.2",
+    "prisma": "7.10.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@swc/core": "1.16.2",
+    "@types/node": "24.13.6",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "unplugin-swc": "2.0.0",
+    "vitest": "5.0.1"
+  },
+  "allowScripts": {
+    "@prisma/engines@7.10.0": true,
+    "@swc/core@1.16.2": true,
+    "esbuild@0.28.2": true,
+    "prisma@7.10.0": true,
+    "protobufjs@7.6.6": true
+  },
+  "scripts": {
+    "build": "prisma generate && tsc -p tsconfig.build.json",
+    "start": "node --env-file-if-exists=.env dist/src/main.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:integration": "DATABASE_URL=${TEST_DATABASE_URL:?Set TEST_DATABASE_URL} prisma migrate deploy && vitest run --config vitest.integration.config.ts",
+    "prisma:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy"
+  }
+}

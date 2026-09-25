@@ -57,11 +57,12 @@ flowchart LR
 2. Validar el JSON y `Idempotency-Key`.
 3. Resolver o crear el registro de idempotencia y un UUID estable `order_id`.
 4. Verificar que el cliente local exista.
-5. Llamar una vez a `ReserveStock(order_id, items)`.
-6. Inventory valida cada pieza y cantidad, bloquea/actualiza el stock de forma atómica, registra los movimientos y devuelve snapshots de las piezas junto con el stock antes/después.
-7. Sales inserta la orden confirmada y los snapshots de sus items dentro de su propia transacción.
-8. Si el paso 7 falla, Sales llama a `ReleaseStock(order_id)` como compensación.
-9. Devolver HTTP 201 y `Location: /v1/orders/{orderId}`.
+5. Llamar a `ReserveStock(order_id, items)`; los retries explícitos reutilizan la misma key y `order_id`.
+6. Inventory valida piezas/cantidades, bloquea y actualiza el stock de forma atómica, registra movimientos y devuelve snapshots.
+7. Sales guarda la orden confirmada, snapshots y respuesta original dentro de su transacción local.
+8. Si falla la persistencia después de reservar, Sales persiste `COMPENSATING` y luego libera stock. Un retry con la misma key completa la compensación de forma serializada.
+9. Si se pierde el ACK del commit local, Sales vuelve a leer la key: una orden confirmada reproduce la respuesta original y conserva su reserva.
+10. Devolver HTTP 201 y `Location: /v1/orders/{orderId}`.
 
 ## Flujo de cancelación
 
@@ -69,7 +70,10 @@ flowchart LR
 2. Si ya está `CANCELLED`, devolverla con 200.
 3. Llamar a `ReleaseStock(order_id)`.
 4. Sólo después del éxito, actualizar la orden local a `CANCELLED` con `cancelledAt`.
+
 5. Devolver 200.
+
+Si la liberación tiene éxito pero falla la actualización local, la orden permanece `CONFIRMED`; el retry vuelve a solicitar el release idempotente y completa el estado local sin reponer stock dos veces.
 
 ## Reglas transaccionales de Inventory
 

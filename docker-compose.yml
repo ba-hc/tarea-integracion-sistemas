@@ -1,0 +1,101 @@
+services:
+  sales-db:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_DB: sales
+      POSTGRES_USER: sales
+      POSTGRES_PASSWORD: sales-local-only
+    volumes:
+      - sales-data-v18:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sales -d sales"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  inventory-db:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_DB: inventory
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: inventory-local-only
+    volumes:
+      - inventory-data-v18:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory -d inventory"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  inventory-grpc:
+    build:
+      context: .
+      dockerfile: apps/inventory-grpc/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://inventory:inventory-local-only@inventory-db:5432/inventory?schema=public
+      GRPC_HOST: 0.0.0.0
+      GRPC_PORT: 50051
+      LOG_FORMAT: json
+    ports:
+      - "127.0.0.1:50051:50051"
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "dist/src/health/health-probe.js"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 6
+
+  sales-api:
+    build:
+      context: .
+      dockerfile: apps/sales-api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://sales:sales-local-only@sales-db:5432/sales?schema=public
+      HOST: 0.0.0.0
+      PORT: 3000
+      API_KEY_READER: ${API_KEY_READER:-local-reader-key-for-demo}
+      API_KEY_OPERATOR: ${API_KEY_OPERATOR:-local-operator-key-for-demo}
+      INVENTORY_GRPC_URL: ${INVENTORY_GRPC_URL:-inventory-grpc:50051}
+      INVENTORY_RPC_DEADLINE_MS: ${INVENTORY_RPC_DEADLINE_MS:-800}
+      INVENTORY_PROTO_PATH: /repo/contracts/grpc/repuestossur/inventory/v1/inventory.proto
+    ports:
+      - "3000:3000"
+    depends_on:
+      sales-db:
+        condition: service_healthy
+      inventory-grpc:
+        condition: service_healthy
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    profiles: [experiment]
+    command: ["-host=0.0.0.0"]
+    ports:
+      - "127.0.0.1:8474:8474"
+    expose:
+      - "50051"
+    depends_on:
+      inventory-grpc:
+        condition: service_healthy
+
+  sales-test-db:
+    image: postgres:18.6-alpine
+    profiles: [test]
+    environment:
+      POSTGRES_DB: sales_test
+      POSTGRES_USER: sales
+      POSTGRES_PASSWORD: sales-test-only
+    ports:
+      - "127.0.0.1:${SALES_TEST_DB_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sales -d sales_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  sales-data-v18:
+  inventory-data-v18:

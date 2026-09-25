@@ -1,0 +1,10 @@
+# Build context is the repository root; retain only Sales API and the frozen proto.
+**
+!apps/sales-api/**
+!contracts/grpc/**
+
+apps/sales-api/node_modules
+apps/sales-api/dist
+apps/sales-api/src/generated
+apps/sales-api/.env
+apps/sales-api/.env.*

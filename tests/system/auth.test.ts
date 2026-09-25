@@ -1,4 +1,4 @@
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   expectError,
   expectStatus,
@@ -46,5 +46,7 @@ describe('Autenticacion y autorizacion', () => {
   it('/v1/health es publico', async () => {
     const response = await request('GET', '/v1/health');
     expectStatus(response, 200, 'GET /v1/health sin key');
+    expect(response.body).toEqual({ status: 'ok', service: 'sales-api' });
+    expect(response.headers.get('x-trace-id')).toMatch(/^[0-9a-f-]{36}$/i);
   });
 });

@@ -7,6 +7,7 @@ import {
   createCustomer,
   createOrder,
   expectError,
+  newIdempotencyKey,
   expectStatus,
   partWithStock,
 } from './api.js';
@@ -31,6 +32,8 @@ const latenciaLenta = 1500;
 
 const compose = (...args: string[]) =>
   execFileSync('docker', ['compose', ...args], { cwd: repoRoot, stdio: 'pipe' });
+const startInventoryAndWait = () =>
+  compose('up', '-d', '--wait', '--wait-timeout', '60', inventoryService);
 
 const toxic = (...args: string[]) =>
   execFileSync('bash', [toxicScript, ...args], { cwd: repoRoot, stdio: 'pipe' });
@@ -49,7 +52,7 @@ describe.skipIf(!habilitadas)('Fallas de la dependencia', () => {
     } catch {
       // Toxiproxy puede no estar levantado; no es motivo para ensuciar el reporte.
     }
-    compose('start', inventoryService);
+    startInventoryAndWait();
   });
 
   it('con Inventory detenido responde 503', async () => {
@@ -63,16 +66,17 @@ describe.skipIf(!habilitadas)('Fallas de la dependencia', () => {
         'crear una orden con Inventory detenido'
       );
     } finally {
-      compose('start', inventoryService);
+      startInventoryAndWait();
     }
   });
 
-  it(`con Inventory mas lento que el deadline responde 504`, async () => {
+  it(`con Inventory mas lento que el deadline responde 504 y permite reintentar`, async () => {
+    const idempotencyKey = newIdempotencyKey();
     toxic('ensure');
     toxic('set', String(latenciaLenta));
     try {
       const inicio = Date.now();
-      const response = await createOrder(customerId, partWithStock());
+      const response = await createOrder(customerId, partWithStock(), 1, idempotencyKey);
       const transcurrido = Date.now() - inicio;
 
       expectError(
@@ -87,6 +91,10 @@ describe.skipIf(!habilitadas)('Fallas de la dependencia', () => {
     } finally {
       toxic('clear');
     }
+    const recovered = await createOrder(customerId, partWithStock(), 1, idempotencyKey);
+    expectStatus(recovered, 201, 'reintentar la clave tras recuperar Inventory');
+    expect(recovered.body.status).toBe('CONFIRMED');
+    await cancelOrder(recovered.body.id);
   });
 
   it('vuelve a aceptar ordenes cuando Inventory se recupera', async () => {

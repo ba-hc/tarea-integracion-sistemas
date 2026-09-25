@@ -1,0 +1,1 @@
+ALTER TYPE "idempotency_state" ADD VALUE 'COMPENSATING';

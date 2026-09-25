@@ -1,0 +1,84 @@
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  runtime                = "nodejs"
+  moduleFormat           = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension    = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Customer {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @db.VarChar(120)
+  email     String   @unique @db.VarChar(254)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  orders Order[]
+
+  @@map("customers")
+}
+
+enum OrderStatus {
+  CONFIRMED
+  CANCELLED
+
+  @@map("order_status")
+}
+
+model Order {
+  id         String      @id @default(uuid()) @db.Uuid
+  customerId String      @map("customer_id") @db.Uuid
+  status     OrderStatus @default(CONFIRMED)
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  cancelledAt DateTime?  @map("cancelled_at") @db.Timestamptz(3)
+
+  customer Customer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  items    OrderItem[]
+
+  @@index([customerId, createdAt])
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id              String @id @default(uuid()) @db.Uuid
+  orderId         String @map("order_id") @db.Uuid
+  partId          String @map("part_id") @db.Uuid
+  partSkuSnapshot String @map("part_sku_snapshot") @db.VarChar(40)
+  partNameSnapshot String @map("part_name_snapshot") @db.VarChar(120)
+  quantity        Int
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, partId])
+  @@index([partId])
+  @@map("order_items")
+}
+
+enum IdempotencyState {
+  IN_PROGRESS
+  CONFIRMED
+  FAILED
+  COMPENSATING
+
+  @@map("idempotency_state")
+}
+
+model IdempotencyRequest {
+  key            String           @id @db.VarChar(128)
+  requestHash    String           @map("request_hash") @db.Char(64)
+  orderId        String           @unique @map("order_id") @db.Uuid
+  state          IdempotencyState
+  responseStatus Int?             @map("response_status")
+  responseBody   Json?             @map("response_body")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("idempotency_requests")
+}

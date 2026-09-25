@@ -55,7 +55,7 @@ accidente.
 
 ```bash
 cd tests/system
-npm install
+npm ci
 
 export API_KEY_OPERATOR=<key operator>
 export API_KEY_READER=<key reader>
@@ -64,10 +64,19 @@ export PART_WITH_STOCK=<uuid de la pieza de pruebas>
 npm test
 ```
 
-Las pruebas de falla se corren aparte, porque detienen y ralentizan Inventory:
+Las pruebas de falla detienen y ralentizan Inventory; requieren que Sales esté conectado a
+Toxiproxy. Desde la raíz del repositorio:
 
 ```bash
+INVENTORY_GRPC_URL=toxiproxy:50051 docker compose --profile experiment up -d --build --wait
+bash experiments/timeout/scripts/toxic.sh ensure
+cd tests/system
 RUN_FAILURE_TESTS=1 npm test
+
+# Restaurar el target gRPC directo después de la prueba.
+cd ../..
+INVENTORY_GRPC_URL=inventory-grpc:50051 \
+  docker compose --profile experiment up -d --force-recreate --wait sales-api
 ```
 
 Los archivos se ejecutan en serie (`--no-file-parallelism`): varias pruebas comparten la misma
@@ -88,6 +97,11 @@ congelado: `code`, `message` y `traceId`.
 
 ## Estado
 
-La suite está escrita contra los contratos congelados y **todavía no se ha ejecutado**: depende
-de que estén mergeados RS-102, RS-201/202 y RS-301/302/303. Hasta entonces fallará por no poder
-conectar con Sales, que es el comportamiento esperado en un flujo contract-first.
+Verificada el 25-09-2026 contra el stack Docker Compose con PostgreSQL 18.6 e Inventory real:
+
+- Corrida normal (Sales→Inventory directo): **26 pasaron, 3 omitidas** (pruebas de falla).
+- `RUN_FAILURE_TESTS=1` (Sales→Toxiproxy): **29 pasaron**, incluidas Inventory detenido →
+  503, demora 1500 ms → 504 y recuperación de la misma `Idempotency-Key` sin doble descuento.
+
+La prueba de recuperación espera la condición `healthy` de Inventory después de iniciarlo;
+`docker compose start` por sí solo sólo confirma que el proceso arrancó, no que gRPC esté listo.

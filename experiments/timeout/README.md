@@ -32,10 +32,13 @@ de códigos HTTP.
 
 ### Qué se controla y por qué
 
-- **`constant-arrival-rate`, no VUs constantes.** Es la decisión que hace válido el
-  experimento. Mantiene la carga ofrecida fija (20 req/s) aunque la latencia crezca. Con VUs
-  constantes el throughput se desplomaría al subir la latencia, y estaríamos midiendo el
-  efecto del generador de carga en vez del efecto del deadline.
+- **`constant-arrival-rate`, no VUs constantes.** Mantiene fija la carga ofrecida aunque la latencia crezca.
+  Con VUs constantes el throughput se desplomaría al subir la latencia y mediríamos el generador,
+  no el efecto del deadline.
+- **5 req/s**, por debajo de las 10 conexiones predeterminadas del pool PostgreSQL de Sales.
+  Cada transacción retiene una conexión mientras espera a Inventory: con 1.500 ms inyectados,
+  5 × 1,5 = 7,5 solicitudes concurrentes esperadas; 20 req/s saturaría el pool y mezclaría
+  saturación con el efecto del deadline.
 - **Warm-up de 5 s descartado** antes de cada corrida, para no medir el arranque en frío de
   conexiones, pool de la base de datos y JIT.
 - **Misma pieza, misma cantidad (1), mismo cliente** durante todo el barrido.
@@ -47,11 +50,11 @@ de códigos HTTP.
 
 ### El riesgo del diseño: agotamiento de stock
 
-`POST /v1/orders` descuenta stock de verdad, y el barrido completo genera unas 10.000 órdenes
-por brazo. Si el stock se acaba, las respuestas pasan a 409 `INSUFFICIENT_STOCK` y la corrida
-deja de medir latencia para medir otra cosa. Por eso el experimento usa una pieza sembrada con
-stock alto y **`run.sh` aborta en cuanto ve un solo 409**: es preferible cortar el barrido a
-guardar un resultado contaminado.
+`POST /v1/orders` descuenta stock de verdad; el barrido genera unas 2.700 órdenes medidas
+por brazo (más 450 de warm-up). Si el stock se acaba, las respuestas pasan a 409
+`INSUFFICIENT_STOCK` y la corrida deja de medir latencia para medir otra cosa. Por eso el
+experimento usa una pieza sembrada con stock alto y **`run.sh` aborta en cuanto ve un solo
+409**: es preferible cortar el barrido a guardar un resultado contaminado.
 
 ## Requisitos
 
@@ -77,30 +80,36 @@ Cada brazo es una ejecución completa, porque cambiar el deadline exige recrear 
 script no cambia el deadline: se configura en el stack y se le pasa a `run.sh` para etiquetar
 las filas.
 
+Desde la raíz del repositorio:
+
 ```bash
 export SALES_BASE_URL=http://localhost:3000
-export SALES_API_KEY=<key con rol operator>
+export API_KEY_OPERATOR=<key con rol operator>
+export SALES_API_KEY="$API_KEY_OPERATOR"
 export EXPERIMENT_PART_ID=<uuid de la pieza sembrada>
 
+# En ambos brazos, Sales debe atravesar Toxiproxy.
 # Brazo 1 - con deadline (el comportamiento congelado)
-INVENTORY_RPC_DEADLINE_MS=800 docker compose --profile experiment up -d --build
-DEADLINE_MS=800 bash scripts/run.sh
+INVENTORY_GRPC_URL=toxiproxy:50051 INVENTORY_RPC_DEADLINE_MS=800 \
+  docker compose --profile experiment up -d --build --wait
+DEADLINE_MS=800 bash experiments/timeout/scripts/run.sh
 
 # Brazo 2 - linea base sin deadline efectivo
-INVENTORY_RPC_DEADLINE_MS=60000 docker compose --profile experiment up -d --force-recreate sales-api
-DEADLINE_MS=60000 bash scripts/run.sh
+INVENTORY_GRPC_URL=toxiproxy:50051 INVENTORY_RPC_DEADLINE_MS=60000 \
+  docker compose --profile experiment up -d --force-recreate --wait sales-api
+DEADLINE_MS=60000 bash experiments/timeout/scripts/run.sh
 ```
 
 `run.sh` regenera `results/summary.csv` con todas las corridas acumuladas en `results/runs/`,
 así que tras el segundo brazo el CSV contiene los 36 registros.
 
 Variables opcionales: `LATENCIES` (default `0 250 500 750 1000 1500`), `REPS` (`3`),
-`RATE` (`20`), `DURATION` (`30s`), `WARMUP` (`5s`).
+`RATE` (`5`), `DURATION` (`30s`), `WARMUP` (`5s`).
 
 Para una prueba de humo rápida antes del barrido real:
 
 ```bash
-LATENCIES="0 1000" REPS=1 DURATION=10s DEADLINE_MS=800 bash scripts/run.sh
+LATENCIES="0 1000" REPS=1 DURATION=10s DEADLINE_MS=800 bash experiments/timeout/scripts/run.sh
 ```
 
 ## Resultados
@@ -124,10 +133,33 @@ Columnas de `summary.csv`:
 | `status_other` | cualquier otro código; señal de que algo se salió del diseño |
 | `p50_ms`, `p95_ms`, `p99_ms`, `max_ms` | latencia observada por el cliente |
 
-La lectura esperada: en el brazo con deadline, `max_ms` debería quedar acotado cerca de los
-800 ms y los 504 deberían aparecer al pasar de 750 a 1000 ms de latencia inyectada; en el
-brazo sin deadline, la latencia debería seguir creciendo con la latencia inyectada y casi no
-debería haber 504. Si los datos no muestran eso, se reporta lo que muestran.
+Ejecución completada: 6 latencias × 2 deadlines × 3 repeticiones, 30 s por corrida, 5 req/s,
+warm-up de 5 s descartado. La tabla resume las tres repeticiones por condición; `p95` es la
+mediana de los tres p95 y `máx.` el máximo observado.
+
+| Deadline | Latencia | Solicitudes | 201 | 504 | p95 (ms) | Máx. (ms) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 800 | 0 | 451 | 451 | 0 | 28.47 | 40.37 |
+| 800 | 250 | 452 | 452 | 0 | 287.30 | 295.44 |
+| 800 | 500 | 453 | 453 | 0 | 514.90 | 539.04 |
+| 800 | 750 | 451 | 451 | 0 | 779.70 | 792.37 |
+| 800 | 1000 | 452 | 0 | 452 | 825.75 | 835.14 |
+| 800 | 1500 | 453 | 0 | 453 | 820.90 | 836.00 |
+| 60000 | 0 | 452 | 452 | 0 | 27.45 | 37.35 |
+| 60000 | 250 | 452 | 452 | 0 | 283.36 | 292.55 |
+| 60000 | 500 | 453 | 453 | 0 | 513.54 | 536.29 |
+| 60000 | 750 | 451 | 451 | 0 | 763.33 | 780.37 |
+| 60000 | 1000 | 453 | 453 | 0 | 1013.97 | 1027.59 |
+| 60000 | 1500 | 452 | 452 | 0 | 1514.10 | 1536.30 |
+
+En el brazo de 800 ms se completaron 2.712 solicitudes: 1.807 HTTP 201 y 905 HTTP 504;
+no hubo 409, 503 ni otros códigos. Las seis corridas de 1.000/1.500 ms devolvieron 504 en
+el 100 % de las solicitudes. En el brazo de 60.000 ms, las 2.713 solicitudes devolvieron 201.
+
+**Conclusión.** Los datos apoyan la hipótesis: el timeout separa 750 de 1.000 ms inyectados
+y evita que la latencia del Inventory lento siga creciendo como en la línea base. No es un
+límite duro de 800 ms para HTTP: el máximo observado fue 836 ms porque el deadline se aplica
+al RPC y la respuesta HTTP añade el manejo del error y su propio recorrido.
 
 ## Limitaciones conocidas
 
@@ -143,8 +175,8 @@ Van en el informe junto con las conclusiones; reconocerlas es parte de lo que se
    es la diferencia entre condiciones, no el valor aislado.
 3. **Docker Desktop sobre Windows añade una capa de virtualización** que desplaza las
    latencias base hacia arriba respecto de Linux nativo.
-4. **20 req/s es carga moderada, no saturación.** El experimento mide el efecto del timeout,
-   no dónde está el cuello de botella del sistema; eso sería otro experimento.
+4. **5 req/s evita saturar el pool PostgreSQL predeterminado de 10 conexiones de Sales**
+   incluso con 1.500 ms inyectados; no mide capacidad ni dónde está el cuello de botella.
 5. **El deadline se aplica por RPC, no por solicitud HTTP.** La creación de una orden hace una
    sola llamada a `ReserveStock`, así que en este escenario coinciden; en un flujo con varias
    llamadas a Inventory dejarían de coincidir.
@@ -153,6 +185,7 @@ Van en el informe junto con las conclusiones; reconocerlas es parte de lo que se
 
 ## Estado
 
-El arnés está completo y la hipótesis registrada. El barrido **no se ha ejecutado todavía**:
-depende de que estén mergeados RS-102, RS-201/202 y RS-301/302/303. `run.sh` crea `results/`
-en la primera corrida, y esos datos son los que van al informe (RS-403).
+Barrido ejecutado el 2026-09-25 con Docker Compose y `grafana/k6:0.57.0`: 36 corridas
+completas y cero códigos ajenos a 201/504. Los resultados fila por fila están en
+[`results/summary.csv`](results/summary.csv); el análisis, límites y guion de defensa están en
+[`docs/report/DEMO.md`](../../docs/report/DEMO.md) (RS-403).
