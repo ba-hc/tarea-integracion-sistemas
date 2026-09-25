@@ -20,6 +20,44 @@ La creación y la cancelación de órdenes dependen sincrónicamente de Inventor
 - Sales nunca confirma una orden cuando la reserva de stock es desconocida o ha fallado.
 - Sales nunca marca una orden como cancelada hasta que Inventory confirme la liberación de stock.
 
+## Justificación
+Las alternativas 1 y 3 se compararon midiendo, no argumentando. El experimento RS-402 inyectó
+seis latencias con Toxiproxy en el salto Sales → Inventory y ejecutó dos brazos de
+`INVENTORY_RPC_DEADLINE_MS` —800 ms y 60000 ms, este último como línea base sin deadline
+efectivo— con tres repeticiones de 30 s a 5 req/s cada uno. Medias de las tres repeticiones, en
+milisegundos:
+
+| Latencia inyectada | p95 con deadline | p95 sin deadline | 504 con deadline |
+|---:|---:|---:|---:|
+| 0 | 28 | 27 | 0 |
+| 250 | 287 | 283 | 0 |
+| 500 | 519 | 513 | 0 |
+| 750 | 779 | 765 | 0 |
+| 1000 | 825 | 1013 | 452 de 452 |
+| 1500 | 823 | 1514 | 453 de 453 |
+
+Tres lecturas sostienen la decisión:
+
+1. **Mientras Inventory responde dentro del presupuesto, el deadline no cuesta nada.** Hasta los
+   750 ms inyectados los dos brazos son indistinguibles y no aparece un solo 504.
+2. **Cuando Inventory se degrada, el deadline acota la espera.** A 1000 y 1500 ms inyectados la
+   latencia observada se estanca en unos 825 ms de p95 y no superó los 836 ms de máximo en
+   ninguna corrida, mientras que sin deadline sigue a la latencia inyectada sin techo.
+3. **El costo es total, no gradual.** En esas dos condiciones el 100 % de las solicitudes se
+   convirtió en 504 y no se confirmó ninguna orden. El deadline no degrada suavemente: cambia
+   disponibilidad por una falla acotada y explícita, que es justamente el intercambio que esta
+   decisión acepta.
+
+La alternativa 1 queda descartada por evidencia y no por preferencia: no produjo ningún 504, pero
+hizo esperar al llamador 1,5 s con Inventory a 1500 ms, y esa espera crece con la lentitud de la
+dependencia sin límite superior.
+
+Límite de la medición: el barrido llega a 1500 ms de latencia inyectada y a 5 req/s, por debajo
+de las 10 conexiones del pool de PostgreSQL de Sales. No se midió el punto en que la espera sin
+deadline agota ese pool y la degradación deja de ser sólo latencia; ese efecto sería peor que el
+observado, así que la evidencia acota el beneficio por abajo, no por arriba. Datos fila por fila
+en [`experiments/timeout/results/summary.csv`](../../experiments/timeout/results/summary.csv).
+
 ## Compensación al crear una orden
 1. Sales crea un registro de idempotencia y un `order_id` UUID estable.
 2. Sales llama a `ReserveStock(order_id, items)`. Un timeout, error de transporte o 5xx conserva la key en estado recuperable porque la reserva pudo confirmarse antes de perder la respuesta.
