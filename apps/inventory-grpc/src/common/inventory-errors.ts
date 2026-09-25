@@ -49,8 +49,8 @@ export class OrderIdConflictError extends InventoryError {
   }
 }
 
-// Los dos errores siguientes cubren casos que ERROR-MAPPING.md todavía no
-// define. Su estado gRPC es PROVISORIO y debe acordarse con Sales.
+// Los casos de reserva ausente o ya liberada están definidos en
+// docs/architecture/ERROR-MAPPING.md.
 
 /** ReleaseStock de un order_id que nunca se reservó. */
 export class ReservationNotFoundError extends InventoryError {

@@ -2,20 +2,16 @@
 
 ## Línea base congelada
 
-La línea base de integración corresponde exactamente a:
+La línea base de integración corresponde a estos archivos:
 
 - `contracts/rest/openapi.yaml`
 - `contracts/grpc/repuestossur/inventory/v1/inventory.proto`
 - `contracts/buf.yaml`
-- ADR-001 hasta ADR-004
-- políticas de arquitectura en `docs/architecture/`
+- `contracts/CHANGELOG.md`
 
-Después de validar e integrar a `main`, crear:
+El tag publicado `contracts-v1.0.0` apunta al commit `8289b5eeed4e4dedc8fe974e27566f21dfc67401`. No se debe mover ni recrear ese tag.
 
-```bash
-git tag -a contracts-v1.0.0 -m "Congelar contratos REST y gRPC de RepuestosSur v1.0.0"
-git push origin contracts-v1.0.0
-```
+Los ADR y documentos de arquitectura explican y pueden evolucionar independientemente; no forman parte de la línea base inmutable mientras no cambien esos archivos de contrato.
 
 ## Regla de congelamiento
 
@@ -38,14 +34,16 @@ Requiere:
 - todas las pruebas afectadas actualizadas deliberadamente;
 - un nuevo tag de contratos.
 
-## Controles requeridos antes de crear el tag
+## Controles de CI para contratos
+
+`.github/workflows/ci.yml` valida los contratos en PRs y en push a `main`:
 
 ```bash
-# estilo y compilación de protobuf
+npx --yes @redocly/cli@2.54.2 lint contracts/rest/openapi.yaml
+oasdiff breaking --fail-on ERR \
+  'refs/tags/contracts-v1.0.0:contracts/rest/openapi.yaml' \
+  'HEAD:contracts/rest/openapi.yaml'
 buf lint contracts/grpc
-
-# una vez que exista la línea base, los PR futuros también ejecutan:
 buf breaking contracts/grpc --against '.git#tag=contracts-v1.0.0,subdir=contracts/grpc'
+docker compose config --quiet
 ```
-
-CI también debe validar `contracts/rest/openapi.yaml` con un validador compatible con OpenAPI 3.1 y puede usar una herramienta de diff de OpenAPI para rechazar cambios REST incompatibles respecto del tag congelado.

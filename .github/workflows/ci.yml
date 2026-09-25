@@ -1,0 +1,215 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Contracts and Compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Lint OpenAPI
+        run: npx --yes @redocly/cli@2.54.2 lint contracts/rest/openapi.yaml
+
+      - name: Check OpenAPI compatibility
+        uses: oasdiff/oasdiff-action/breaking@v0
+        with:
+          base: refs/tags/contracts-v1.0.0:contracts/rest/openapi.yaml
+          revision: HEAD:contracts/rest/openapi.yaml
+          fail-on: ERR
+          review: false
+
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.73.0
+          github_token: ${{ github.token }}
+          setup_only: true
+
+      - name: Lint Protobuf
+        run: buf lint contracts/grpc
+
+      - name: Check Protobuf compatibility
+        run: buf breaking contracts/grpc --against '.git#tag=contracts-v1.0.0,subdir=contracts/grpc'
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config --quiet
+
+  inventory:
+    name: Inventory quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: inventory
+          POSTGRES_PASSWORD: inventory-test-only
+          POSTGRES_DB: inventory_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U inventory -d inventory_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://inventory:inventory-test-only@localhost:5432/inventory_test?schema=public
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/inventory-grpc/package-lock.json
+
+      - name: Install dependencies
+        working-directory: apps/inventory-grpc
+        run: npm ci --no-audit --no-fund
+      - name: Generate Prisma client
+        working-directory: apps/inventory-grpc
+        run: npm run prisma:generate
+
+      - name: Typecheck
+        working-directory: apps/inventory-grpc
+        run: npm run typecheck
+
+      - name: Unit tests
+        working-directory: apps/inventory-grpc
+        run: npm test
+
+      - name: PostgreSQL integration tests
+        working-directory: apps/inventory-grpc
+        run: npm run test:integration
+
+      - name: Build
+        working-directory: apps/inventory-grpc
+        run: npm run build
+
+  sales:
+    name: Sales quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: sales
+          POSTGRES_PASSWORD: sales-test-only
+          POSTGRES_DB: sales_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sales -d sales_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://sales:sales-test-only@localhost:5432/sales_test?schema=public
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/sales-api/package-lock.json
+
+      - name: Install dependencies
+        working-directory: apps/sales-api
+        run: npm ci --no-audit --no-fund
+      - name: Generate Prisma client
+        working-directory: apps/sales-api
+        run: npm run prisma:generate
+
+      - name: Typecheck
+        working-directory: apps/sales-api
+        run: npm run typecheck
+
+      - name: Unit tests
+        working-directory: apps/sales-api
+        run: npm test
+
+      - name: PostgreSQL integration tests
+        working-directory: apps/sales-api
+        run: npm run test:integration
+
+      - name: Build
+        working-directory: apps/sales-api
+        run: npm run build
+
+  system:
+    name: Black-box and dependency-failure tests
+    runs-on: ubuntu-latest
+    needs: [contracts, inventory, sales]
+    timeout-minutes: 35
+    env:
+      API_KEY_READER: local-reader-key-for-demo
+      API_KEY_OPERATOR: local-operator-key-for-demo
+      PART_WITH_STOCK: e58e2904-9db7-4c8d-8f36-7107e863a268
+      INVENTORY_GRPC_URL: toxiproxy:50051
+      INVENTORY_RPC_DEADLINE_MS: 800
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tests/system/package-lock.json
+
+      - name: Install system test dependencies
+        working-directory: tests/system
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck system tests
+        working-directory: tests/system
+        run: npm run typecheck
+
+      - name: Start the integrated stack
+        run: docker compose --profile experiment up --build --wait --wait-timeout 180
+
+      - name: Wait for Sales and Toxiproxy
+        run: |
+          for _ in {1..60}; do
+            if curl --fail --silent http://localhost:3000/v1/health >/dev/null \
+              && curl --fail --silent http://localhost:8474/version >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Sales or Toxiproxy did not become ready" >&2
+          exit 1
+
+      - name: Create the Inventory proxy
+        run: bash experiments/timeout/scripts/toxic.sh ensure
+
+      - name: Run black-box API tests
+        working-directory: tests/system
+        run: npm test
+
+      - name: Run dependency-failure API tests
+        working-directory: tests/system
+        env:
+          RUN_FAILURE_TESTS: "1"
+        run: npm test
+
+      - name: Stop the Compose stack
+        if: always()
+        run: docker compose --profile experiment down --volumes --remove-orphans

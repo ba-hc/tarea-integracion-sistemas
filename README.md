@@ -60,7 +60,7 @@ La línea base de integración corresponde a:
 
 - REST: `/v1`
 - gRPC package: `repuestossur.inventory.v1`
-- Tag previsto: `contracts-v1.0.0`
+- Tag publicado: `contracts-v1.0.0`
 
 Después de congelar esa línea base, los cambios a `openapi.yaml` o `inventory.proto` deben realizarse mediante un cambio de contrato deliberado, no como efecto colateral de una implementación.
 
@@ -76,9 +76,10 @@ Después de congelar esa línea base, los cambios a `openapi.yaml` o `inventory.
 Node.js 24 y Docker Compose v2 son necesarios.
 
 ```bash
-cp .env.example .env
 docker compose up --build
 ```
+
+Copiar `.env.example` a `.env` es opcional; Compose ya define valores locales por defecto. Use ese archivo si necesita sobreescribirlos.
 
 Sales queda disponible en `http://localhost:3000`; `/v1/health` es público. Las claves
 locales están declaradas en `.env.example` sólo para la demo. Sustitúyelas antes de usar
@@ -98,7 +99,8 @@ y [`docs/report/DEMO.md`](docs/report/DEMO.md).
 
 ## Uso de asistentes de IA
 
-En esta iteración se utilizó un asistente de IA para revisar los contratos, implementar la
-Sales REST API y apoyar la documentación. La implementación se comprobó con typecheck/build,
-pruebas unitarias, integración PostgreSQL y la suite black-box; el informe RS-402 conserva la
-evidencia empírica. Quienes entreguen el proyecto deben revisar y comprender estos cambios.
+En esta revisión de auditoría se utilizó OpenAI Codex (modelo `gpt-6-luna`) para contrastar fuentes técnicas y actualizar CI, ADR-002 y la documentación de errores, contratos y contribuciones.
+
+El repositorio no identifica qué herramienta apoyó la implementación inicial de Sales REST API; no se atribuye ese trabajo a Codex. Quienes entreguen el proyecto deben revisar los cambios y la evidencia de verificación.
+
+La verificación local incluyó `actionlint`, Redocly y oasdiff para OpenAPI, `buf lint`/`buf breaking`, `docker compose config`, typecheck, pruebas unitarias, integración PostgreSQL y build de ambas aplicaciones, typecheck y pruebas black-box/resiliencia del sistema, y arranque Compose con y sin el perfil `experiment`. Redocly emitió advertencias no bloqueantes; oasdiff no detectó cambios contractuales.

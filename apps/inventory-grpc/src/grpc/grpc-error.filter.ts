@@ -19,7 +19,7 @@ const STATUS_BY_ERROR: ReadonlyArray<readonly [abstract new (...args: never[]) =
   [PartsNotFoundError, GrpcStatus.NOT_FOUND],
   [InsufficientStockError, GrpcStatus.FAILED_PRECONDITION],
   [OrderIdConflictError, GrpcStatus.ALREADY_EXISTS],
-  // PROVISORIOS: casos no definidos en ERROR-MAPPING.md, pendientes de acordar con Sales.
+  // Estados terminales documentados en ERROR-MAPPING.md.
   [ReservationNotFoundError, GrpcStatus.NOT_FOUND],
   [ReservationAlreadyReleasedError, GrpcStatus.FAILED_PRECONDITION],
 ];
