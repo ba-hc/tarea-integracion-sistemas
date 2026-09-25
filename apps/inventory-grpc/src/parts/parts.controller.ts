@@ -9,7 +9,7 @@ import {
 import { toProtoPart } from './part.mapper.js';
 import { PartsService } from './parts.service.js';
 
-/** RPCs de consulta de InventoryService. ReserveStock/ReleaseStock llegan en RS-202. */
+/** RPCs de consulta de InventoryService. */
 @Controller()
 export class PartsController {
   constructor(@Inject(PartsService) private readonly parts: PartsService) {}

@@ -1,7 +1,28 @@
 import { Catch, Logger, type RpcExceptionFilter } from '@nestjs/common';
 import { GrpcException, GrpcStatus, type GrpcExceptionBody } from '@nestjs/microservices';
 import { throwError, type Observable } from 'rxjs';
-import { InvalidArgumentError, PartNotFoundError } from '../common/inventory-errors.js';
+import {
+  InsufficientStockError,
+  InvalidArgumentError,
+  OrderIdConflictError,
+  PartNotFoundError,
+  PartsNotFoundError,
+  ReservationAlreadyReleasedError,
+  ReservationNotFoundError,
+} from '../common/inventory-errors.js';
+
+// Error de dominio -> estado gRPC. Espejo de la tabla "Estados gRPC de
+// Inventory" en ERROR-MAPPING.md.
+const STATUS_BY_ERROR: ReadonlyArray<readonly [abstract new (...args: never[]) => Error, GrpcStatus]> = [
+  [InvalidArgumentError, GrpcStatus.INVALID_ARGUMENT],
+  [PartNotFoundError, GrpcStatus.NOT_FOUND],
+  [PartsNotFoundError, GrpcStatus.NOT_FOUND],
+  [InsufficientStockError, GrpcStatus.FAILED_PRECONDITION],
+  [OrderIdConflictError, GrpcStatus.ALREADY_EXISTS],
+  // PROVISORIOS: casos no definidos en ERROR-MAPPING.md, pendientes de acordar con Sales.
+  [ReservationNotFoundError, GrpcStatus.NOT_FOUND],
+  [ReservationAlreadyReleasedError, GrpcStatus.FAILED_PRECONDITION],
+];
 
 /**
  * Único punto de traducción error -> estado gRPC (ERROR-MAPPING.md).
@@ -19,11 +40,10 @@ export class GrpcErrorFilter implements RpcExceptionFilter<unknown> {
   }
 
   toGrpcError(exception: unknown): GrpcExceptionBody {
-    if (exception instanceof InvalidArgumentError) {
-      return { code: GrpcStatus.INVALID_ARGUMENT, message: exception.message };
-    }
-    if (exception instanceof PartNotFoundError) {
-      return { code: GrpcStatus.NOT_FOUND, message: exception.message };
+    for (const [errorType, code] of STATUS_BY_ERROR) {
+      if (exception instanceof errorType) {
+        return { code, message: exception.message };
+      }
     }
     if (exception instanceof GrpcException) {
       return exception.getError();
