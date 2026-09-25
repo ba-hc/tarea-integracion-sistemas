@@ -17,6 +17,14 @@ export interface SeedPart {
  */
 export const EXPERIMENT_PART_ID = '0be383fa-f9d8-4eb9-87ec-2e528faf83eb';
 
+/**
+ * Pieza reservada para las pruebas de sistema (RS-401, PART_WITH_STOCK). Stock
+ * bajo y conocido: la suite lo consume entero y lo repone al terminar.
+ * No usarla en la demo ni en el experimento.
+ */
+export const SYSTEM_TEST_PART_ID = 'e58e2904-9db7-4c8d-8f36-7107e863a268';
+export const SYSTEM_TEST_PART_STOCK = 5;
+
 export const SEED_PARTS: readonly SeedPart[] = [
   // Frenos
   { id: '3224288d-5201-477a-aa99-cb7cd1ba628d', sku: 'FRN-PAS-DEL-001', name: 'Pastillas de freno delanteras cerámicas', stockAvailable: 40 },
@@ -45,6 +53,8 @@ export const SEED_PARTS: readonly SeedPart[] = [
   // Sin stock: permite demostrar el rechazo por stock insuficiente.
   { id: '74199389-6b4e-43f2-96b2-c2a4ab3959bc', sku: 'EMB-KIT-020', name: 'Kit de embrague completo', stockAvailable: 0 },
   { id: 'f989e963-a0fb-4799-80e8-1aeff10629be', sku: 'ESC-SIL-021', name: 'Silenciador de escape trasero', stockAvailable: 0 },
+  // Pruebas de sistema RS-401.
+  { id: SYSTEM_TEST_PART_ID, sku: 'SYS-TEST-000', name: 'Repuesto para pruebas de sistema RS-401', stockAvailable: SYSTEM_TEST_PART_STOCK },
   // Experimento RS-402.
   { id: EXPERIMENT_PART_ID, sku: 'EXP-TIMEOUT-000', name: 'Repuesto de carga para experimento RS-402', stockAvailable: 50000 },
 ];
