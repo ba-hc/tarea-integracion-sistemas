@@ -95,6 +95,27 @@ Cuando una aserción falla, el mensaje incluye el código recibido y el cuerpo c
 respuesta, no un `true !== false`. Los errores además se verifican contra el envelope
 congelado: `code`, `message` y `traceId`.
 
+## Criterio Docker
+
+TEST-MATRIX exige que, desde un estado limpio, `docker compose up --build` baste para iniciar
+los servicios obligatorios. La suite de Vitest no puede comprobarlo: da por hecho un stack ya
+levantado.
+
+El job `system` del CI levanta el stack, pero **con `--profile experiment`** y con
+`INVENTORY_GRPC_URL=toxiproxy:50051`, porque necesita Toxiproxy para las pruebas de falla. Es
+decir: la configuración que el CI valida no es la predeterminada. El arranque sin perfiles
+—Sales hablando directo con `inventory-grpc`, que es el comando del enunciado y el que se
+muestra en el video— no lo verifica nadie. Eso es lo que cubre este script:
+
+```bash
+bash tests/system/check-stack.sh
+```
+
+Destruye los volúmenes (`down -v`), levanta con `--wait` para que los healthcheck decidan
+cuándo está listo, comprueba que `sales-db`, `inventory-db`, `inventory-grpc` y `sales-api`
+quedaron en ejecución, y que `GET /v1/health` responde 200 sin API key. Los perfiles
+`experiment` y `test` quedan fuera a propósito: no son obligatorios.
+
 ## Estado
 
 Verificada el 25-09-2026 contra el stack Docker Compose con PostgreSQL 18.6 e Inventory real:
