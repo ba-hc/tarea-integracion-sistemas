@@ -1,0 +1,10 @@
+# Contexto = raíz del repo. Sólo se necesitan apps/inventory-grpc y contracts/grpc.
+**
+!apps/inventory-grpc/**
+!contracts/grpc/**
+
+apps/inventory-grpc/node_modules
+apps/inventory-grpc/dist
+apps/inventory-grpc/src/generated
+apps/inventory-grpc/.env
+apps/inventory-grpc/.env.*

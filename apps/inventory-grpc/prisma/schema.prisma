@@ -1,0 +1,28 @@
+// Base de datos propia de Inventory. Sales nunca accede a ella
+// (docs/architecture/DATA-OWNERSHIP.md).
+
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  runtime                = "nodejs"
+  moduleFormat           = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension    = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Part {
+  id             String   @id @default(uuid()) @db.Uuid
+  sku            String   @unique @db.VarChar(40)
+  name           String   @db.VarChar(120)
+  // La restricción CHECK (stock_available >= 0) se agrega a mano en la
+  // migración inicial: Prisma no la expresa en el esquema.
+  stockAvailable Int      @map("stock_available")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("parts")
+}
