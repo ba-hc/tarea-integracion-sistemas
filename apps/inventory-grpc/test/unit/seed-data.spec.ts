@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EXPERIMENT_PART_ID, SEED_PARTS } from '../../prisma/seed-data.js';
+import { EXPERIMENT_PART_ID, SEED_PARTS, SYSTEM_TEST_PART_ID, SYSTEM_TEST_PART_STOCK } from '../../prisma/seed-data.js';
 import { isUuid } from '../../src/common/uuid.js';
 
 describe('SEED_PARTS', () => {
@@ -35,5 +35,11 @@ describe('SEED_PARTS', () => {
   it('incluye la pieza del experimento RS-402 con stock >= 50000', () => {
     const part = SEED_PARTS.find((p) => p.id === EXPERIMENT_PART_ID);
     expect(part?.stockAvailable).toBeGreaterThanOrEqual(50_000);
+  });
+
+  it('incluye la pieza de pruebas de sistema RS-401 con stock 5 (la suite exige 1..20)', () => {
+    const part = SEED_PARTS.find((p) => p.id === SYSTEM_TEST_PART_ID);
+    expect(SYSTEM_TEST_PART_STOCK).toBe(5);
+    expect(part?.stockAvailable).toBe(SYSTEM_TEST_PART_STOCK);
   });
 });
