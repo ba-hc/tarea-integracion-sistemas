@@ -22,6 +22,7 @@ export function createTestPrisma(): PrismaClient {
   return new PrismaClient({ adapter: new PrismaPg({ connectionString: testDatabaseUrl() }) });
 }
 
-export async function truncateParts(prisma: PrismaClient): Promise<void> {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "parts"');
+/** Deja la base vacía: catálogo y ledger. */
+export async function resetDatabase(prisma: PrismaClient): Promise<void> {
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "stock_operation_items", "stock_operations", "parts"');
 }

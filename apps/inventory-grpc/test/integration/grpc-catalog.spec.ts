@@ -1,77 +1,29 @@
-import 'reflect-metadata';
-import { createServer } from 'node:net';
 import * as grpc from '@grpc/grpc-js';
-import * as protoLoader from '@grpc/proto-loader';
-import type { INestMicroservice } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { SEED_PARTS } from '../../prisma/seed-data.js';
 import { seedParts } from '../../prisma/seed-parts.js';
-import { AppModule } from '../../src/app.module.js';
-import { loadConfig } from '../../src/config/app-config.js';
 import type { PrismaClient } from '../../src/generated/prisma/client.js';
-import { grpcServerOptions } from '../../src/grpc/grpc-server-options.js';
-import { createTestPrisma, testDatabaseUrl, truncateParts } from './test-database.js';
-
-// Prueba de caja negra del servidor gRPC real: el cliente se construye sólo a
-// partir del .proto congelado, igual que lo hará Sales.
-
-type Callback<T> = (error: grpc.ServiceError | null, response: T) => void;
-interface InventoryClient extends grpc.Client {
-  GetPart(request: object, options: grpc.CallOptions, callback: Callback<any>): void;
-  ListParts(request: object, options: grpc.CallOptions, callback: Callback<any>): void;
-}
-
-async function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as { port: number };
-      server.close(() => resolve(port));
-    });
-  });
-}
+import { startGrpcHarness, type GrpcHarness } from './grpc-harness.js';
+import { createTestPrisma, resetDatabase } from './test-database.js';
 
 describe('InventoryService gRPC: catálogo', () => {
-  let app: INestMicroservice;
-  let client: InventoryClient;
+  let grpcHarness: GrpcHarness;
   let prisma: PrismaClient;
 
-  const call = <T>(method: 'GetPart' | 'ListParts', request: object): Promise<T> =>
-    new Promise((resolve, reject) => {
-      client[method](request, { deadline: Date.now() + 5_000 }, (error, response) =>
-        error ? reject(error) : resolve(response as T),
-      );
-    });
+  const call = <T>(method: 'GetPart' | 'ListParts', request: object): Promise<T> => grpcHarness.call<T>(method, request);
 
   beforeAll(async () => {
     prisma = createTestPrisma();
-    const port = await freePort();
-    const config = loadConfig({ DATABASE_URL: testDatabaseUrl(), GRPC_HOST: '127.0.0.1', GRPC_PORT: String(port) });
-
-    app = await NestFactory.createMicroservice(AppModule.register(config), {
-      ...grpcServerOptions(config),
-      logger: false,
-    });
-    await app.listen();
-
-    const definition = protoLoader.loadSync(config.protoPath, { keepCase: true, longs: String, defaults: true });
-    const pkg = grpc.loadPackageDefinition(definition) as any;
-    client = new pkg.repuestossur.inventory.v1.InventoryService(
-      `127.0.0.1:${port}`,
-      grpc.credentials.createInsecure(),
-    ) as InventoryClient;
+    grpcHarness = await startGrpcHarness();
   });
 
   afterAll(async () => {
-    client?.close();
-    await app?.close();
+    await grpcHarness?.close();
     await prisma?.$disconnect();
   });
 
   beforeEach(async () => {
-    await truncateParts(prisma);
+    await resetDatabase(prisma);
     await seedParts(prisma);
   });
 
@@ -145,19 +97,9 @@ describe('InventoryService gRPC: catálogo', () => {
     });
 
     it('devuelve una lista vacía si no hay piezas', async () => {
-      await truncateParts(prisma);
+      await resetDatabase(prisma);
 
       await expect(call('ListParts', {})).resolves.toEqual({ parts: [] });
     });
-  });
-
-  it('ReserveStock todavía no está implementado (RS-202)', async () => {
-    await expect(
-      new Promise((resolve, reject) =>
-        (client as any).ReserveStock({ order_id: SEED_PARTS[0]!.id }, (error: unknown, res: unknown) =>
-          error ? reject(error) : resolve(res),
-        ),
-      ),
-    ).rejects.toMatchObject({ code: grpc.status.UNIMPLEMENTED });
   });
 });
