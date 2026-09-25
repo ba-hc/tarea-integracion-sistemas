@@ -24,5 +24,55 @@ model Part {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  stockOperationItems StockOperationItem[]
+
   @@map("parts")
+}
+
+enum StockOperationStatus {
+  RESERVED
+  RELEASED
+
+  @@map("stock_operation_status")
+}
+
+// Ledger de movimientos de stock: una fila por order_id lógico de Sales.
+// order_id NO es una foreign key: la orden vive en la base de Sales.
+model StockOperation {
+  orderId     String               @id @map("order_id") @db.Uuid
+  // sha256 de los ítems normalizados; detecta reutilización del order_id
+  // con un payload distinto.
+  requestHash String               @map("request_hash") @db.Char(64)
+  status      StockOperationStatus
+  reservedAt  DateTime             @map("reserved_at") @db.Timestamptz(3)
+  releasedAt  DateTime?            @map("released_at") @db.Timestamptz(3)
+
+  items StockOperationItem[]
+
+  @@map("stock_operations")
+}
+
+// Una línea por pieza de la operación. Guarda lo necesario para reproducir
+// exactamente las respuestas de ReserveStock y ReleaseStock.
+model StockOperationItem {
+  id                  String @id @default(uuid()) @db.Uuid
+  orderId             String @map("order_id") @db.Uuid
+  // Posición en la solicitud original, para responder en el mismo orden.
+  lineNumber          Int    @map("line_number") @db.SmallInt
+  partId              String @map("part_id") @db.Uuid
+  partSku             String @map("part_sku") @db.VarChar(40)
+  partName            String @map("part_name") @db.VarChar(120)
+  quantity            Int
+  reservedStockBefore Int    @map("reserved_stock_before")
+  reservedStockAfter  Int    @map("reserved_stock_after")
+  releasedStockBefore Int?   @map("released_stock_before")
+  releasedStockAfter  Int?   @map("released_stock_after")
+
+  operation StockOperation @relation(fields: [orderId], references: [orderId], onDelete: Restrict)
+  part      Part           @relation(fields: [partId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, partId])
+  @@unique([orderId, lineNumber])
+  @@index([partId])
+  @@map("stock_operation_items")
 }

@@ -8,8 +8,8 @@ Implementa `repuestossur.inventory.v1.InventoryService` según el contrato conge
 |---|---|
 | `GetPart` | implementado (RS-201) |
 | `ListParts` | implementado (RS-201) |
-| `ReserveStock` | pendiente (RS-202), hoy responde `UNIMPLEMENTED` |
-| `ReleaseStock` | pendiente (RS-202), hoy responde `UNIMPLEMENTED` |
+| `ReserveStock` | implementado (RS-202) |
+| `ReleaseStock` | implementado (RS-202) |
 
 Stack: Node 24, TypeScript, NestJS 12 (ESM), Prisma 7 con `@prisma/adapter-pg`, PostgreSQL 18.6, Vitest.
 
@@ -17,8 +17,8 @@ Stack: Node 24, TypeScript, NestJS 12 (ESM), Prisma 7 con `@prisma/adapter-pg`, 
 
 ```text
 prisma/
-  schema.prisma          modelo `parts` (base propia de Inventory)
-  migrations/            migraciones SQL versionadas (incluye CHECK stock >= 0)
+  schema.prisma          `parts` y el ledger `stock_operations` / `stock_operation_items`
+  migrations/            migraciones SQL versionadas (incluye los CHECK de invariantes)
   seed-data.ts           catálogo inicial con UUID fijos
   seed-parts.ts          lógica del seed (insert-missing / reset)
   seed.ts                punto de entrada del seed
@@ -28,6 +28,7 @@ src/
   config/                lectura y validación de variables de entorno
   grpc/                  opciones del servidor, tipos del .proto, Timestamp, filtro de errores
   parts/                 GetPart / ListParts (controller, service, mapper)
+  stock/                 ReserveStock / ReleaseStock (validación, huella, transacción, mapper)
   prisma/                PrismaService (una sola instancia y pool por proceso)
   common/                errores de dominio y validación de UUID
 test/
@@ -72,8 +73,33 @@ npm start              # escucha en GRPC_PORT
 ```bash
 npm run typecheck
 npm test                    # unitarias, sin base de datos
-npm run test:integration    # requiere TEST_DATABASE_URL; aplica migraciones y borra la tabla parts
+npm run test:integration    # requiere TEST_DATABASE_URL; aplica migraciones y vacía las tablas
 ```
+
+`test/integration/grpc-stock-concurrency.spec.ts` contiene el caso obligatorio de
+[TEST-MATRIX.md](../../docs/architecture/TEST-MATRIX.md): stock 10 y 20 reservas
+simultáneas de 1 unidad dan exactamente 10 éxitos, 10 `FAILED_PRECONDITION` y stock final 0.
+
+## Reserva y liberación de stock
+
+Cada `ReserveStock` / `ReleaseStock` corre en **una transacción** de PostgreSQL (READ COMMITTED):
+
+1. `pg_advisory_xact_lock(order_id)` serializa las llamadas con el mismo `order_id`, así un
+   duplicado simultáneo espera y devuelve el replay en vez de chocar.
+2. Si ya existe una operación para ese `order_id`, se responde desde el ledger (`replayed=true`)
+   sin tocar el stock. En `ReserveStock`, si la huella de los ítems difiere, responde `ALREADY_EXISTS`.
+3. `SELECT … FROM parts … ORDER BY id FOR UPDATE` bloquea las piezas involucradas. Ordenar por
+   id hace que dos órdenes con piezas en común pidan los bloqueos en el mismo orden (sin deadlocks).
+4. Se valida todo (piezas existentes, stock suficiente) **antes** de la primera escritura; si algo
+   falla, no se escribió nada. Luego se descuentan o reponen todas las piezas y se registra el ledger.
+
+El `CHECK (stock_available >= 0)` de la base es la última defensa si la aplicación fallara.
+
+**Ledger.** `stock_operations` tiene una fila por `order_id` (estado `RESERVED` → `RELEASED`, huella
+sha256 de los ítems normalizados y timestamps). `stock_operation_items` guarda por línea la cantidad,
+el stock antes/después de la reserva y de la liberación, y la foto de sku/nombre, lo que permite
+reproducir exactamente cualquier respuesta. Una reserva fallida no deja rastro ni consume el
+`order_id`: puede reintentarse cuando haya stock.
 
 ## Seed
 
@@ -101,9 +127,18 @@ según [ERROR-MAPPING.md](../../docs/architecture/ERROR-MAPPING.md):
 
 | Condición | Estado |
 |---|---|
-| `part_id` no es un UUID | `INVALID_ARGUMENT` |
-| pieza inexistente | `NOT_FOUND` |
+| UUID mal formado, `items` vacío o con más de 50, cantidad fuera de 1..999, pieza duplicada | `INVALID_ARGUMENT` |
+| pieza inexistente (`GetPart` o alguna línea de `ReserveStock`) | `NOT_FOUND` |
+| stock insuficiente en alguna línea | `FAILED_PRECONDITION` |
+| mismo `order_id` con otro payload de reserva | `ALREADY_EXISTS` |
 | cualquier error inesperado (BD, bug) | `INTERNAL` con mensaje genérico; el detalle sólo va al log |
+
+**Provisorio** (ERROR-MAPPING.md no define estos casos; pendiente de acordar con Sales):
+
+| Condición | Estado actual |
+|---|---|
+| `ReleaseStock` de un `order_id` sin reserva | `NOT_FOUND` |
+| `ReserveStock` de un `order_id` ya liberado (mismo payload) | `FAILED_PRECONDITION`, sin mutar stock |
 
 ## Docker
 

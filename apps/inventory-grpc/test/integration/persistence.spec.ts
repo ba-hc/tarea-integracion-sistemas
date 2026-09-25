@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { EXPERIMENT_PART_ID, SEED_PARTS } from '../../prisma/seed-data.js';
 import { seedParts } from '../../prisma/seed-parts.js';
 import type { PrismaClient } from '../../src/generated/prisma/client.js';
-import { createTestPrisma, truncateParts } from './test-database.js';
+import { createTestPrisma, resetDatabase } from './test-database.js';
 
 const snapshot = (prisma: PrismaClient) =>
   prisma.part.findMany({ orderBy: { id: 'asc' }, select: { id: true, sku: true, name: true, stockAvailable: true } });
@@ -19,7 +19,7 @@ describe('persistencia de parts (PostgreSQL real)', () => {
   });
 
   beforeEach(async () => {
-    await truncateParts(prisma);
+    await resetDatabase(prisma);
   });
 
   describe('restricciones del esquema', () => {

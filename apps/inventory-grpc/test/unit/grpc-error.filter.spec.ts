@@ -2,7 +2,15 @@ import { Logger } from '@nestjs/common';
 import { GrpcAlreadyExistsException, GrpcStatus } from '@nestjs/microservices';
 import { firstValueFrom } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { InvalidArgumentError, PartNotFoundError } from '../../src/common/inventory-errors.js';
+import {
+  InsufficientStockError,
+  InvalidArgumentError,
+  OrderIdConflictError,
+  PartNotFoundError,
+  PartsNotFoundError,
+  ReservationAlreadyReleasedError,
+  ReservationNotFoundError,
+} from '../../src/common/inventory-errors.js';
 import { GrpcErrorFilter } from '../../src/grpc/grpc-error.filter.js';
 
 describe('GrpcErrorFilter', () => {
@@ -25,6 +33,16 @@ describe('GrpcErrorFilter', () => {
       code: GrpcStatus.NOT_FOUND,
       message: `part ${id} not found`,
     });
+  });
+
+  it.each([
+    ['PartsNotFoundError', new PartsNotFoundError(['p1', 'p2']), GrpcStatus.NOT_FOUND],
+    ['InsufficientStockError', new InsufficientStockError([{ partId: 'p1', requested: 3, available: 1 }]), GrpcStatus.FAILED_PRECONDITION],
+    ['OrderIdConflictError', new OrderIdConflictError('o1'), GrpcStatus.ALREADY_EXISTS],
+    ['ReservationNotFoundError (provisorio)', new ReservationNotFoundError('o1'), GrpcStatus.NOT_FOUND],
+    ['ReservationAlreadyReleasedError (provisorio)', new ReservationAlreadyReleasedError('o1'), GrpcStatus.FAILED_PRECONDITION],
+  ])('traduce %s según ERROR-MAPPING.md', (_label, error, code) => {
+    expect(filter.toGrpcError(error)).toEqual({ code, message: error.message });
   });
 
   it('respeta una GrpcException explícita', () => {

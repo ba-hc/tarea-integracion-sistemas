@@ -41,3 +41,33 @@ export type ListPartsRequest = Record<string, never>;
 export interface ListPartsResponse {
   parts: ProtoPart[];
 }
+
+export interface StockItemRequest {
+  part_id: string;
+  quantity: number;
+}
+
+export interface ReserveStockRequest {
+  order_id: string;
+  items: StockItemRequest[];
+}
+
+export interface StockMutationItem {
+  part: ProtoPart;
+  quantity: number;
+  stock_before: number;
+  stock_after: number;
+}
+
+export interface ReserveStockResponse {
+  order_id: string;
+  items: StockMutationItem[];
+  processed_at: ProtoTimestamp;
+  replayed: boolean;
+}
+
+export interface ReleaseStockRequest {
+  order_id: string;
+}
+
+export type ReleaseStockResponse = ReserveStockResponse;
