@@ -2,9 +2,10 @@
 
 ## Antes de empezar
 
-1. Lee `AGENTS.md`.
-2. Revisa el OpenAPI, `.proto` y ADR relacionados con el cambio.
-3. Confirma que el cambio no altera accidentalmente un contrato congelado.
+1. Revisa los contratos OpenAPI y gRPC.
+2. Revisa los ADR y documentos de arquitectura relacionados con el cambio.
+3. Confirma que el cambio no altera accidentalmente la línea base congelada.
+4. Consulta `AGENTS.md` para las reglas operativas del repositorio.
 
 ## Flujo recomendado
 
@@ -14,7 +15,7 @@
 - Evita refactors no relacionados.
 - No subas secretos, `.env`, credenciales, dumps ni volúmenes locales.
 
-Ejemplos de branches:
+Ejemplos:
 
 ```text
 feat/inventory-catalog
@@ -25,26 +26,26 @@ contract/add-compatible-field
 
 ## Contratos
 
-Los contratos se encuentran en `contracts/` y se consideran fuente de verdad.
+Los contratos de integración se encuentran en `contracts/` y constituyen la fuente de verdad de las interfaces.
 
-Después de `contracts-v1.0.0`, cualquier cambio a `openapi.yaml` o `inventory.proto` debe ir en un PR dedicado de contrato con justificación, pruebas/documentación actualizadas y análisis de compatibilidad.
+La línea base publicada es `contracts-v1.0.0`. Después de ese tag, cualquier cambio a `openapi.yaml` o `inventory.proto` debe realizarse como un cambio deliberado de contrato, con justificación, pruebas/documentación actualizadas y análisis de compatibilidad.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on GitHub-hosted runners for pull requests to `main`, pushes to `main`, and manual dispatch. It validates OpenAPI and protobuf compatibility, Compose configuration, Inventory and Sales unit/integration tests and builds, plus black-box API and dependency-failure tests through Toxiproxy.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) se ejecuta en pull requests hacia `main`, pushes a `main` y mediante ejecución manual. Valida contratos, Docker Compose, typecheck, pruebas unitarias, integración PostgreSQL, builds, pruebas black-box y fallas de dependencia.
 
 ## Trazabilidad de contribuciones
 
-Snapshot de GitHub `main` en `2ae5ca67` (2026-09-25), anterior a esta rama. Los commits cuentan autoría visible en GitHub; cerrar un issue no demuestra que sus cambios estén en `main`.
+La trazabilidad se mantiene mediante issues asignados, PRs y commits identificables. El historial de GitHub es la fuente vigente para la autoría y evolución del proyecto.
 
-| Integrante | Issues y PRs vinculados | Commits visibles en `main` |
-|---|---|---:|
-| `@ba-hc` | [RS-301 (#7)](https://github.com/ba-hc/tarea-integracion-sistemas/issues/7); implementación integrada de Sales en [2ae5ca6](https://github.com/ba-hc/tarea-integracion-sistemas/commit/2ae5ca67f9509cd596e1fdeb7abf1551ab2a1cf5) | 23 |
-| `@martin777pro` | [RS-201 (#4)](https://github.com/ba-hc/tarea-integracion-sistemas/issues/4), [RS-202 (#5)](https://github.com/ba-hc/tarea-integracion-sistemas/issues/5), [RS-203 (#6)](https://github.com/ba-hc/tarea-integracion-sistemas/issues/6); PRs [#13](https://github.com/ba-hc/tarea-integracion-sistemas/pull/13), [#14](https://github.com/ba-hc/tarea-integracion-sistemas/pull/14), [#15](https://github.com/ba-hc/tarea-integracion-sistemas/pull/15) | 18 |
-| `@TomasGutierrez777` | [RS-401 (#10)](https://github.com/ba-hc/tarea-integracion-sistemas/issues/10), [RS-402 (#11)](https://github.com/ba-hc/tarea-integracion-sistemas/issues/11); commits [31c245e](https://github.com/ba-hc/tarea-integracion-sistemas/commit/31c245e6ce83fff30640fcef44c97bd576f5c274), [3c9a8cb](https://github.com/ba-hc/tarea-integracion-sistemas/commit/3c9a8cb90872200326fde9002a0449d997ff5b7a), [eb74b88](https://github.com/ba-hc/tarea-integracion-sistemas/commit/eb74b888030b0ef3cbff2c4cd703c495fb5cefea), [e458a6c](https://github.com/ba-hc/tarea-integracion-sistemas/commit/e458a6ccf3b2097ccc71ec5bbe912fa134685357) | 4 |
-| `@JorshSlimming` | [RS-101 (#1)](https://github.com/ba-hc/tarea-integracion-sistemas/issues/1), [RS-102 (#2)](https://github.com/ba-hc/tarea-integracion-sistemas/issues/2), [RS-103 (#3)](https://github.com/ba-hc/tarea-integracion-sistemas/issues/3); tag publicado [`contracts-v1.0.0`](https://github.com/ba-hc/tarea-integracion-sistemas/tree/contracts-v1.0.0) | 0 |
+| Integrante | Responsabilidad principal | Issues principales |
+|---|---|---|
+| [`@ba-hc`](https://github.com/ba-hc) | Sales REST, integración gRPC, resiliencia e idempotencia pública | [RS-301 #7](https://github.com/ba-hc/tarea-integracion-sistemas/issues/7), [RS-302 #8](https://github.com/ba-hc/tarea-integracion-sistemas/issues/8), [RS-303 #9](https://github.com/ba-hc/tarea-integracion-sistemas/issues/9) |
+| [`@martin777pro`](https://github.com/martin777pro) | Inventory gRPC, persistencia y motor de stock | [RS-201 #4](https://github.com/ba-hc/tarea-integracion-sistemas/issues/4), [RS-202 #5](https://github.com/ba-hc/tarea-integracion-sistemas/issues/5), [RS-203 #6](https://github.com/ba-hc/tarea-integracion-sistemas/issues/6) |
+| [`@JorshSlimming`](https://github.com/JorshSlimming) | contratos, plataforma local, Docker Compose y CI/quality gates | [RS-101 #1](https://github.com/ba-hc/tarea-integracion-sistemas/issues/1), [RS-102 #2](https://github.com/ba-hc/tarea-integracion-sistemas/issues/2), [RS-103 #3](https://github.com/ba-hc/tarea-integracion-sistemas/issues/3) |
+| [`@TomasGutierrez777`](https://github.com/TomasGutierrez777) | E2E black-box, experimento ABET 6 y evidencia técnica | [RS-401 #10](https://github.com/ba-hc/tarea-integracion-sistemas/issues/10), [RS-402 #11](https://github.com/ba-hc/tarea-integracion-sistemas/issues/11), [RS-403 #12](https://github.com/ba-hc/tarea-integracion-sistemas/issues/12) |
 
-Corrección de @JorshSlimming: la descripción anterior de toda mi contribución como local fue un error mío; no sé por qué omití el tag. `contracts-v1.0.0` sí está publicado en GitHub: el tag anotado identifica a Jorsh Slimming como tagger y apunta al commit [`8289b5e`](https://github.com/ba-hc/tarea-integracion-sistemas/commit/8289b5eeed4e4dedc8fe974e27566f21dfc67401). El contador `0` sólo cuenta commits de Jorsh en `main` remoto al snapshot `2ae5ca67`; publicar el tag es una contribución separada. Los comentarios de cierre de [#1](https://github.com/ba-hc/tarea-integracion-sistemas/issues/1#issuecomment-5832348782), [#2](https://github.com/ba-hc/tarea-integracion-sistemas/issues/2#issuecomment-5832349324) y [#3](https://github.com/ba-hc/tarea-integracion-sistemas/issues/3#issuecomment-5832349926) se referían a los commits de implementación que quedaron en `main` local, no a la publicación del tag.
+Entre las contribuciones trazables se encuentran los PRs de Inventory [#13](https://github.com/ba-hc/tarea-integracion-sistemas/pull/13), [#14](https://github.com/ba-hc/tarea-integracion-sistemas/pull/14) y [#15](https://github.com/ba-hc/tarea-integracion-sistemas/pull/15), la integración de Sales en `main`, y el PR [#16](https://github.com/ba-hc/tarea-integracion-sistemas/pull/16), que incorporó CI y los ajustes finales de auditoría.
 
 ## Definition of Done
 
@@ -52,7 +53,8 @@ Antes de solicitar merge:
 
 - lint/typecheck/tests relevantes pasan;
 - el build del componente afectado pasa;
-- la implementación coincide con el contrato;
+- la implementación coincide con los contratos;
 - no existe acceso cruzado entre bases de datos;
 - los errores públicos siguen el envelope definido;
+- los cambios contractuales pasan las verificaciones de compatibilidad;
 - el diff no contiene secretos ni cambios no relacionados.
