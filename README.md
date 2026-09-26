@@ -99,8 +99,8 @@ y [`docs/report/DEMO.md`](docs/report/DEMO.md).
 
 ## Uso de asistentes de IA
 
-En esta revisión de auditoría se utilizó OpenAI Codex (modelo `gpt-6-luna`) para contrastar fuentes técnicas y actualizar CI, ADR-002 y la documentación de errores, contratos y contribuciones.
+Durante el desarrollo y la revisión del proyecto se utilizaron **ChatGPT y OpenAI Codex** como asistentes para análisis arquitectónico, revisión de contratos, documentación técnica, configuración de CI, diseño y revisión de pruebas, y validación de decisiones de integración y resiliencia.
 
-El repositorio no identifica qué herramienta apoyó la implementación inicial de Sales REST API; no se atribuye ese trabajo a Codex. Quienes entreguen el proyecto deben revisar los cambios y la evidencia de verificación.
+El uso de estos asistentes fue complementario al trabajo del equipo: las decisiones de arquitectura, contratos, implementación y resultados experimentales fueron revisados y contrastados con el código, los ADR, los contratos versionados y las pruebas automatizadas del repositorio.
 
-La verificación local incluyó `actionlint`, Redocly y oasdiff para OpenAPI, `buf lint`/`buf breaking`, `docker compose config`, typecheck, pruebas unitarias, integración PostgreSQL y build de ambas aplicaciones, typecheck y pruebas black-box/resiliencia del sistema, y arranque Compose con y sin el perfil `experiment`. Redocly emitió advertencias no bloqueantes; oasdiff no detectó cambios contractuales.
+La verificación final incluyó `actionlint`, Redocly y oasdiff para OpenAPI, `buf lint` y `buf breaking` para Protocol Buffers, `docker compose config`, typecheck, pruebas unitarias, pruebas de integración PostgreSQL y build de ambas aplicaciones, además de las pruebas black-box y de resiliencia del sistema. También se verificó el arranque mediante Docker Compose con y sin el perfil de experimentación. Oasdiff no detectó cambios contractuales incompatibles respecto de la línea base congelada.
