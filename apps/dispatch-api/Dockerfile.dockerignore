@@ -1,0 +1,8 @@
+**
+!apps/dispatch-api/**
+
+apps/dispatch-api/node_modules
+apps/dispatch-api/dist
+apps/dispatch-api/src/generated
+apps/dispatch-api/.env
+apps/dispatch-api/.env.*

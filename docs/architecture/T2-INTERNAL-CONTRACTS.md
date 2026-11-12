@@ -1,6 +1,6 @@
 # Contratos internos de la T2
 
-T2-101. Inventario conserva su [contrato gRPC v1](../../contracts/grpc/repuestossur/inventory/v1/inventory.proto). Las interfaces REST de Despacho y Pagos son propuestas internas. La [API pública de Ventas](../../contracts/rest/openapi.yaml) sigue siendo la de la T1.
+Inventario conserva su [contrato gRPC v1](../../contracts/grpc/repuestossur/inventory/v1/inventory.proto). Despacho ofrece una interfaz REST interna. Pagos queda como propuesta para P2. La [API pública de Ventas](../../contracts/rest/openapi.yaml) sigue siendo la de la T1.
 
 ## Identidad de la venta
 
@@ -31,17 +31,34 @@ npm run test:integration -- test/integration/grpc-stock.spec.ts \
   test/integration/grpc-stock-concurrency.spec.ts test/integration/persistence.spec.ts
 ```
 
-## Despacho propuesto
+## Despacho
 
-REST interno en la red de Compose. Se propone un despacho por venta. Para prepararlo basta con `items`, una lista no vacía de `partId` únicos y cantidades enteras positivas en `quantity`. Cambiar el orden de los ítems no cambia la solicitud. La respuesta contiene `orderId`, `items` y `status` (`CREATED` o `CANCELLED`).
+El servicio escucha en `http://dispatch-api:3001` dentro de la red de Compose y usa su propia base PostgreSQL. Hay un despacho por venta. Para prepararlo basta con `items`, una lista no vacía de `partId` únicos y cantidades enteras positivas en `quantity`. Cambiar el orden de los ítems no cambia la solicitud. La respuesta contiene `orderId`, `items` y `status` (`CREATED` o `CANCELLED`).
 
 | Operación | Ruta | Resultado |
 |---|---|---|
-| Crear | `PUT /internal/v1/dispatches/{orderId}` | `201` al crear, `200` al repetir los mismos ítems de un despacho vigente y `409` si cambian los ítems o el despacho ya está cancelado. |
+| Crear | `PUT /internal/v1/dispatches/{orderId}` | `201` al crear, `200` al repetir los mismos ítems de un despacho vigente, `409 DISPATCH_CONFLICT` si cambian los ítems y `409 DISPATCH_CANCELLED` si se intenta reactivar un despacho. |
 | Consultar | `GET /internal/v1/dispatches/{orderId}` | `200` con el estado actual o `404` si no existe. |
 | Cancelar | `POST /internal/v1/dispatches/{orderId}/cancel` | `200` con estado `CANCELLED`, incluso si ya estaba cancelado. `404` si no existe. |
 
-Una solicitud inválida devuelve `400`. En T2-103, el modo de falla estará desactivado por defecto. Para una venta nueva, devolverá `503 DISPATCH_CREATE_REJECTED` antes de guardar el despacho. Ese código confirma el rechazo de esa llamada. Un `503` genérico no ofrece esa garantía.
+Una solicitud inválida devuelve `400 VALIDATION_ERROR`. Con `DISPATCH_FAIL_CREATE=true`, una venta nueva recibe `503 DISPATCH_CREATE_REJECTED` antes de que el servicio escriba el despacho. Ese código confirma el rechazo de esa llamada. Un `503` genérico no ofrece esa garantía. El modo está desactivado por defecto.
+
+### Verificación de Despacho en T2-103
+
+Desde la raíz del repo, levanta el entorno local y ejecuta las pruebas HTTP dentro de la red de Compose.
+
+```bash
+docker compose up --build -d --wait
+docker compose exec -T dispatch-api node --input-type=module - < apps/dispatch-api/test/dispatch.integration.mjs
+```
+
+Para probar el rechazo antes de persistir y devolver el servicio a su modo normal:
+
+```bash
+DISPATCH_FAIL_CREATE=true docker compose up -d --wait dispatch-api
+docker compose exec -T dispatch-api node --input-type=module - < apps/dispatch-api/test/dispatch.integration.mjs
+DISPATCH_FAIL_CREATE=false docker compose up -d --wait dispatch-api
+```
 
 ## Propuesta de contrato para Pagos
 

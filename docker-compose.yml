@@ -27,6 +27,20 @@ services:
       timeout: 3s
       retries: 20
 
+  dispatch-db:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_DB: dispatch
+      POSTGRES_USER: dispatch
+      POSTGRES_PASSWORD: dispatch-local-only
+    volumes:
+      - dispatch-data-v18:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dispatch -d dispatch"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   inventory-grpc:
     build:
       context: .
@@ -69,6 +83,19 @@ services:
       inventory-grpc:
         condition: service_healthy
 
+  dispatch-api:
+    build:
+      context: .
+      dockerfile: apps/dispatch-api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://dispatch:dispatch-local-only@dispatch-db:5432/dispatch?schema=public
+      HOST: 0.0.0.0
+      PORT: 3001
+      DISPATCH_FAIL_CREATE: "${DISPATCH_FAIL_CREATE:-false}"
+    depends_on:
+      dispatch-db:
+        condition: service_healthy
+
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.12.0
     profiles: [experiment]
@@ -99,3 +126,4 @@ services:
 volumes:
   sales-data-v18:
   inventory-data-v18:
+  dispatch-data-v18:

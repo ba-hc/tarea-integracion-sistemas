@@ -1,0 +1,27 @@
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  runtime                = "nodejs"
+  moduleFormat           = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension    = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum DispatchStatus {
+  CREATED
+  CANCELLED
+
+  @@map("dispatch_status")
+}
+
+model Dispatch {
+  orderId String         @id @map("order_id") @db.Uuid
+  items   Json
+  status  DispatchStatus @default(CREATED)
+
+  @@map("dispatches")
+}
