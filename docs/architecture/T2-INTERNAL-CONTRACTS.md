@@ -17,6 +17,20 @@ Cada servicio guarda sus datos y aplica sus cambios en su propio almacén. Las o
 
 Una pieza inexistente devuelve `NOT_FOUND` al reservar. El stock insuficiente o una reserva ya liberada devuelve `FAILED_PRECONDITION`. El cliente gRPC de Ventas usa un plazo de 800 ms por defecto. Véanse el [mapeo de errores](ERROR-MAPPING.md) y la [recuperación de respuestas ambiguas](RELIABILITY.md).
 
+### Verificación de Inventario en T2-102
+
+Pasaron 41 pruebas de integración con Node.js 24, un servidor gRPC real y una base PostgreSQL 18.6 aislada. Con 10 unidades y 20 reservas simultáneas de una unidad, 10 solicitudes se aceptaron, 10 se rechazaron por stock insuficiente y el stock final fue cero. Una reserva de varios ítems se aplica completa o deja el stock intacto. Repetir la reserva o la liberación para la misma orden, incluso en paralelo, modifica el stock una sola vez por operación.
+
+Para repetir la verificación, configura `TEST_DATABASE_URL` con una base desechable cuyo nombre contenga `test`. La suite aplica migraciones y vacía tablas. Desde la raíz del repo:
+
+```bash
+cd apps/inventory-grpc
+npm ci
+npm run prisma:generate
+npm run test:integration -- test/integration/grpc-stock.spec.ts \
+  test/integration/grpc-stock-concurrency.spec.ts test/integration/persistence.spec.ts
+```
+
 ## Despacho propuesto
 
 REST interno en la red de Compose. Se propone un despacho por venta. Para prepararlo basta con `items`, una lista no vacía de `partId` únicos y cantidades enteras positivas en `quantity`. Cambiar el orden de los ítems no cambia la solicitud. La respuesta contiene `orderId`, `items` y `status` (`CREATED` o `CANCELLED`).
