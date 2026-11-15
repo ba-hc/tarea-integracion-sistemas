@@ -1,0 +1,13 @@
+# Context = repository root. Keep only BFF build inputs; never .opencode, .env or video.
+**
+!apps/web-bff/package.json
+!apps/web-bff/package-lock.json
+!apps/web-bff/tsconfig.json
+!apps/web-bff/tsconfig.build.json
+!apps/web-bff/src/**
+apps/web-bff/src/**/*.spec.ts
+apps/web-bff/test/**
+apps/web-bff/node_modules
+apps/web-bff/dist
+apps/web-bff/.env
+apps/web-bff/.env.*
