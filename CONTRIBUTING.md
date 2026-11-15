@@ -7,28 +7,36 @@
 3. Confirma que el cambio no altera accidentalmente la línea base congelada.
 4. Consulta `AGENTS.md` para las reglas operativas del repositorio.
 
-## Flujo recomendado
+## Flujo vigente para T2
 
-- Crea una branch corta y descriptiva desde `main`.
-- Mantén el PR enfocado en un objetivo principal.
+Según el acuerdo del equipo en `Reparto-trabajo-T2.pdf`, las etapas P1 → P2 → P3 → P4 se trabajan directamente en `main`, con commits identificables por integrante. Para las tareas normales de T2 no se exige una branch ni un PR por cambio; este acuerdo reemplaza el flujo de ramas de T1. La excepción son los cambios a contratos congelados, que conservan su proceso dedicado.
+
+- Comprueba el estado local, sitúate en `main` con `git switch main` y actualízala con `git pull --ff-only origin main` antes de comenzar. No descartes cambios locales para cambiar de rama o actualizar.
+- Continúa desde el commit verificado de la etapa anterior. Si adelantas trabajo con dependencias simuladas, deja explícita la integración pendiente.
+- Respeta las responsabilidades de P1, P2, P3 y P4. Coordina los cambios en archivos compartidos, especialmente Compose y CI.
+- Mantén cada cambio enfocado en un objetivo principal y usa commits pequeños con el identificador de la tarea y tu autoría real.
 - Incluye pruebas para comportamiento nuevo o corregido.
+- Ejecuta las validaciones relevantes y entrega instrucciones, pruebas y evidencia reproducibles antes de dar por terminada una etapa.
+- Antes del push, ejecuta `git fetch origin` y comprueba si `origin/main` avanzó. Integra los cambios nuevos sin sobrescribir trabajo ajeno y repite las validaciones afectadas; nunca uses force push sobre `main`.
+- Publica los commits en `main` cuando corresponda. Los agentes sólo hacen push con autorización explícita del usuario.
 - Evita refactors no relacionados.
 - No subas secretos, `.env`, credenciales, dumps ni volúmenes locales.
 
-Ejemplos:
+Ejemplos de mensajes de commit:
 
 ```text
-feat/inventory-catalog
-feat/orders-api
-fix/stock-concurrency
-contract/add-compatible-field
+feat(t2-401): agregar autenticacion del gateway
+test(t2-402): preparar escenarios de falla
+docs(t2-403): documentar pasos de la demo
 ```
+
+Las reglas operativas completas están en [AGENTS.md, sección 8](AGENTS.md#8-reglas-git).
 
 ## Contratos
 
 Los contratos de integración se encuentran en `contracts/` y constituyen la fuente de verdad de las interfaces.
 
-La línea base publicada es `contracts-v1.0.0`. Después de ese tag, cualquier cambio a `openapi.yaml` o `inventory.proto` debe realizarse como un cambio deliberado de contrato, con justificación, pruebas/documentación actualizadas y análisis de compatibilidad.
+La línea base publicada es `contracts-v1.0.0`. Después de ese tag, cualquier cambio a `openapi.yaml` o `inventory.proto` debe realizarse como un cambio deliberado de contrato, con justificación, pruebas/documentación actualizadas y análisis de compatibilidad. El trabajo directo en `main` de T2 no elimina el PR dedicado exigido por [CONTRACT-FREEZE.md](docs/architecture/CONTRACT-FREEZE.md).
 
 ## CI
 
@@ -49,7 +57,7 @@ Entre las contribuciones trazables se encuentran los PRs de Inventory [#13](http
 
 ## Definition of Done
 
-Antes de solicitar merge:
+Antes de publicar un cambio en `main` o solicitar el merge de un PR dedicado de contrato:
 
 - lint/typecheck/tests relevantes pasan;
 - el build del componente afectado pasa;

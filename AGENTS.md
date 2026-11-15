@@ -177,24 +177,29 @@ Mantener los cambios enfocados al componente o responsabilidad necesaria:
 - `/experiments`: scripts y evidencia reproducible de experimentación.
 - `/docs`: arquitectura, ADR y material del informe.
 
-Evitar refactors oportunistas y cambios cruzados que no sean necesarios para el objetivo del PR.
+Evitar refactors oportunistas y cambios cruzados que no sean necesarios para el objetivo del cambio.
 
 ## 8. Reglas Git
 
-Usar una branch por cambio o issue, por ejemplo:
+### Flujo vigente para T2
 
-```text
-feat/orders-grpc-integration
-fix/inventory-stock-race
-```
+El acuerdo del equipo en `Reparto-trabajo-T2.pdf` (sección «Cómo trabajamos» y regla del equipo) establece que las etapas P1 → P2 → P3 → P4 se trabajan directamente en `main`. Para las tareas normales de implementación y documentación de T2, este flujo reemplaza el requisito de T1 de crear una branch y un PR por cambio. Los cambios a contratos congelados conservan el proceso dedicado de la sección 3 y de [CONTRACT-FREEZE.md](docs/architecture/CONTRACT-FREEZE.md).
 
-Un PR normal debe:
+- Antes de empezar, comprobar el estado local, situarse en `main` con `git switch main` y actualizarla con `git pull --ff-only origin main`. No descartar cambios locales para poder cambiar de rama o actualizar.
+- Continuar desde el commit verificado de la etapa anterior. El trabajo adelantado con dependencias simuladas debe identificarse como pendiente de integración, no como una etapa completa.
+- Respetar el reparto de responsabilidades y coordinar antes de modificar archivos compartidos como `docker-compose.yml`, CI o documentación común.
+- Crear commits pequeños, con la autoría real del integrante y el identificador de la tarea, por ejemplo `feat(t2-401): agregar autenticacion del gateway`.
+- Ejecutar las validaciones relevantes y entregar instrucciones reproducibles, pruebas y evidencia de lo que efectivamente se verificó.
+- Antes de publicar, comprobar con `git fetch origin` si `origin/main` avanzó. Si hay cambios nuevos, revisarlos e integrarlos sin sobrescribir trabajo ajeno y repetir las validaciones afectadas. No usar force push sobre `main`.
+- Publicar los commits en `main` cuando corresponda. Un agente sólo hace push con autorización explícita del usuario.
+
+Cada cambio debe:
 
 - tener un objetivo principal claro;
 - incluir pruebas para comportamiento nuevo;
 - evitar refactors no relacionados;
 - mantener commits comprensibles;
-- no modificar contratos congelados salvo que sea un PR dedicado de contrato.
+- no modificar contratos congelados salvo mediante el proceso dedicado de contrato.
 
 No versionar código temporal de debugging, secretos, credenciales generadas, volúmenes locales de base de datos ni logs crudos que no formen parte de evidencia del experimento.
 
