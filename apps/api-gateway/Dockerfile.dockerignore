@@ -1,0 +1,13 @@
+# Context = repository root. Keep only Gateway build inputs; never .opencode, .env or video.
+**
+!apps/api-gateway/package.json
+!apps/api-gateway/package-lock.json
+!apps/api-gateway/tsconfig.json
+!apps/api-gateway/tsconfig.build.json
+!apps/api-gateway/src/**
+apps/api-gateway/src/**/*.spec.ts
+apps/api-gateway/test/**
+apps/api-gateway/node_modules
+apps/api-gateway/dist
+apps/api-gateway/.env
+apps/api-gateway/.env.*
