@@ -63,3 +63,22 @@
 Sales traduce los errores de `ReleaseStock` a `INTERNAL_ERROR`: el identificador y la reserva provienen de una orden ya persistida por Sales, por lo que su ausencia o estado incompatible indica una inconsistencia entre servicios, no un error del cliente.
 
 Sales traduce por operación y estado gRPC, no por el mensaje interno. La reserva ya liberada sólo es un guard de estado interno: el `order_id` no lo elige el cliente y la creación pública normal no reutiliza el id de una orden cancelada.
+
+## Saga de venta (T2)
+
+Desde el contrato v1.1.0, `POST /v1/orders` y `POST /v1/orders/{orderId}/cancel` también dependen de Pagos y Despacho ([ADR-005](../adr/ADR-005-saga-orquestada.md), [P3-SAGA.md](../t2/P3-SAGA.md)). Se usa el mismo envelope y no hay estados públicos nuevos.
+
+| Situación | HTTP | Código público | Efecto en la venta |
+|---|---:|---|---|
+| Pagos rechazó el cobro (definitivo) | 422 | `PAYMENT_DECLINED` | Se libera el stock; no hay orden. |
+| Pagos no disponible: rechazó antes de cobrar (`PAYMENT_CHARGE_REJECTED`) o la conexión fue rechazada | 503 | `PAYMENT_UNAVAILABLE` | Se libera el stock; no hay orden. |
+| Pagos respondió 5xx genérico o `202 PENDING` | 503 / 504 | `PAYMENT_UNAVAILABLE` / `PAYMENT_TIMEOUT` | Cobro en duda: el reintento con la misma key lo resuelve; si no hay reintento, el recuperador aborta y compensa. |
+| Plazo de Pagos excedido | 504 | `PAYMENT_TIMEOUT` | Cobro en duda (igual que arriba). |
+| Despacho rechazó antes de guardar (`DISPATCH_CREATE_REJECTED`) o la conexión fue rechazada | 503 | `DISPATCH_UNAVAILABLE` | Se reembolsa y luego se libera el stock; no hay orden. |
+| Despacho respondió 5xx genérico | 503 | `DISPATCH_UNAVAILABLE` | Despacho en duda (reintento o aborto). |
+| Plazo de Despacho excedido | 504 | `DISPATCH_TIMEOUT` | Despacho en duda (reintento o aborto). |
+| Respuesta inconsistente de un servicio (409 inesperado, `orderId` distinto, 400 a un comando de Ventas) | 500 | `INTERNAL_ERROR` | Rechazo seguro (400) o paso en duda (resto). |
+
+Una cancelación cuya compensación no se confirma devuelve el 503/504 de esa dependencia. La orden sigue `CONFIRMED` hasta que se compensen despacho, pago y stock, en ese orden.
+
+El error que recibe el cliente en una venta fallida queda guardado en `idempotency_requests`, y cada reintento con la misma key lo reproduce, incluso después de que el recuperador termine las compensaciones.

@@ -1,7 +1,7 @@
 openapi: 3.1.2
 info:
   title: RepuestosSur Sales API
-  version: 1.0.0
+  version: 1.1.0
   description: >-
     Public REST API for customer and sales-order operations. Inventory is an
     internal dependency and is never exposed directly through this API.
@@ -127,6 +127,12 @@ paths:
         requested item. Idempotency-Key is mandatory. Retrying the same payload
         with the same key returns the same result and does not create a second
         order. Reusing the key with a different payload returns 409.
+        Since contract v1.1.0 the sale is a Saga orchestrated by Sales: reserve
+        stock, charge the payment and create the dispatch. If a step is
+        rejected, the already confirmed steps are compensated in reverse order
+        and no order is exposed. A 503/504 from a dependency may leave the sale
+        in doubt; retrying with the same key and payload resumes it without
+        charging twice.
       operationId: createOrder
       x-required-role: operator
       parameters:
@@ -182,7 +188,7 @@ paths:
                     message: This Idempotency-Key was already used with a different request payload
                     traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
         '422':
-          description: A referenced part does not exist in Inventory
+          description: A referenced part does not exist in Inventory, or the payment was declined
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -192,8 +198,13 @@ paths:
                     code: PART_NOT_FOUND
                     message: One or more requested parts do not exist
                     traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
-        '503': { $ref: '#/components/responses/InventoryUnavailable' }
-        '504': { $ref: '#/components/responses/InventoryTimeout' }
+                paymentDeclined:
+                  value:
+                    code: PAYMENT_DECLINED
+                    message: The payment was declined
+                    traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+        '504': { $ref: '#/components/responses/DependencyTimeout' }
         '500': { $ref: '#/components/responses/InternalServerError' }
     get:
       tags: [Orders]
@@ -262,7 +273,10 @@ paths:
         Cancellation is idempotent. If the order is already CANCELLED, returns
         the existing cancelled representation with 200 and does not restore
         stock twice. The local order is marked CANCELLED only after Inventory
-        confirms the release.
+        confirms the release. Since contract v1.1.0 a sale is cancelled by
+        compensating its Saga in reverse order (cancel dispatch, refund the
+        payment, release stock); while a compensation is pending the order
+        stays CONFIRMED and the request returns 503/504.
       operationId: cancelOrder
       x-required-role: operator
       parameters:
@@ -289,8 +303,8 @@ paths:
                     code: ORDER_NOT_FOUND
                     message: Order not found
                     traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
-        '503': { $ref: '#/components/responses/InventoryUnavailable' }
-        '504': { $ref: '#/components/responses/InventoryTimeout' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+        '504': { $ref: '#/components/responses/DependencyTimeout' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 components:
   securitySchemes:
@@ -393,31 +407,51 @@ components:
                 code: FORBIDDEN
                 message: The API key does not have permission for this operation
                 traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
-    InventoryUnavailable:
-      description: Inventory service is unavailable
+    DependencyUnavailable:
+      description: Inventory, Payments or Dispatch is unavailable
       headers:
         X-Trace-Id: { $ref: '#/components/headers/TraceId' }
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
           examples:
-            unavailable:
+            inventoryUnavailable:
               value:
                 code: INVENTORY_UNAVAILABLE
                 message: Inventory service is unavailable
                 traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
-    InventoryTimeout:
-      description: Inventory did not respond before the configured deadline
+            paymentUnavailable:
+              value:
+                code: PAYMENT_UNAVAILABLE
+                message: Payment service is unavailable
+                traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+            dispatchUnavailable:
+              value:
+                code: DISPATCH_UNAVAILABLE
+                message: Dispatch service is unavailable
+                traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+    DependencyTimeout:
+      description: Inventory, Payments or Dispatch did not respond before its configured deadline
       headers:
         X-Trace-Id: { $ref: '#/components/headers/TraceId' }
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
           examples:
-            timeout:
+            inventoryTimeout:
               value:
                 code: INVENTORY_TIMEOUT
                 message: Inventory service did not respond before the deadline
+                traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+            paymentTimeout:
+              value:
+                code: PAYMENT_TIMEOUT
+                message: Payment service did not respond before the deadline
+                traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
+            dispatchTimeout:
+              value:
+                code: DISPATCH_TIMEOUT
+                message: Dispatch service did not respond before the deadline
                 traceId: 73a9be64-6e7e-42c2-badc-55f42f649668
     InternalServerError:
       description: Unexpected internal error
