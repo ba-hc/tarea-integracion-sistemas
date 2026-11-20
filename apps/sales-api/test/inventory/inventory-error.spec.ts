@@ -1,7 +1,7 @@
 import { Metadata, status as GrpcStatus, type ServiceError } from '@grpc/grpc-js';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../../src/common/api-error.js';
-import { grpcStatusName, toInventoryApiError, type InventoryOperation } from '../../src/inventory/inventory-error.js';
+import { grpcStatusName, RESERVATION_NOT_FOUND_CODE, toInventoryApiError, type InventoryOperation } from '../../src/inventory/inventory-error.js';
 
 // Mensaje realista de Inventory: si apareciera en el envelope público, sería
 // una fuga de la implementación (SQL/Prisma) hacia el cliente.
@@ -115,5 +115,16 @@ describe('grpcStatusName', () => {
   it('nombra UNKNOWN un error que no viene de gRPC', () => {
     expect(grpcStatusName(new Error('socket hang up'))).toBe('UNKNOWN');
     expect(grpcStatusName({ code: 'ECONNREFUSED' })).toBe('UNKNOWN');
+  });
+});
+
+describe('ReleaseStock during a saga compensation', () => {
+  it('maps NOT_FOUND to an internal-only RESERVATION_NOT_FOUND code and keeps the other mappings', () => {
+    expect(toInventoryApiError({ code: GrpcStatus.NOT_FOUND }, 'compensate')).toMatchObject({ code: RESERVATION_NOT_FOUND_CODE, status: 404 });
+    expect(toInventoryApiError({ code: GrpcStatus.UNAVAILABLE }, 'compensate')).toMatchObject({ code: 'INVENTORY_UNAVAILABLE', status: 503 });
+    expect(toInventoryApiError({ code: GrpcStatus.DEADLINE_EXCEEDED }, 'compensate')).toMatchObject({ code: 'INVENTORY_TIMEOUT', status: 504 });
+    expect(toInventoryApiError({ code: GrpcStatus.FAILED_PRECONDITION }, 'compensate')).toMatchObject({ code: 'INTERNAL_ERROR', status: 500 });
+    // La cancelación pública conserva el mapeo de la T1.
+    expect(toInventoryApiError({ code: GrpcStatus.NOT_FOUND }, 'release')).toMatchObject({ code: 'INTERNAL_ERROR', status: 500 });
   });
 });
