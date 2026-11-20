@@ -75,12 +75,23 @@ services:
       INVENTORY_GRPC_URL: ${INVENTORY_GRPC_URL:-inventory-grpc:50051}
       INVENTORY_RPC_DEADLINE_MS: ${INVENTORY_RPC_DEADLINE_MS:-800}
       INVENTORY_PROTO_PATH: /repo/contracts/grpc/repuestossur/inventory/v1/inventory.proto
+      # T2 Saga (docs/t2/P3-SAGA.md). Pagos (P2) aún no está en Compose, así que
+      # por defecto sólo se reserva stock (comportamiento T1). Para la Saga con
+      # Despacho: SAGA_STEPS=stock,dispatch. Con Pagos desplegado:
+      # SAGA_STEPS=stock,payment,dispatch (valor por defecto del código).
+      SAGA_STEPS: ${SAGA_STEPS:-stock}
+      PAYMENTS_BASE_URL: ${PAYMENTS_BASE_URL:-http://payments-api:3003}
+      DISPATCH_BASE_URL: http://dispatch-api:3001
+      SALE_UNIT_PRICE_MINOR: ${SALE_UNIT_PRICE_MINOR:-10000}
+      SALE_CURRENCY: CLP
     ports:
       - "3000:3000"
     depends_on:
       sales-db:
         condition: service_healthy
       inventory-grpc:
+        condition: service_healthy
+      dispatch-api:
         condition: service_healthy
 
   dispatch-api:
