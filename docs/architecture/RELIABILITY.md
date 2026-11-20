@@ -37,3 +37,17 @@ Si `ReleaseStock` tiene éxito y la actualización local de la orden falla, la o
 ## Prohibición de autorizar con caché obsoleta
 
 Si Redis se implementa más adelante como bonificación opcional, puede cachear respuestas de solo lectura de `GetPart` o listados. Un valor cacheado de disponibilidad nunca debe utilizarse como autoridad para confirmar una orden. `ReserveStock` siempre se ejecuta contra la base de datos transaccional de Inventory.
+
+## Saga de venta (T2)
+
+En la T2, la venta reserva stock, cobra y crea el despacho como una Saga orquestada por Sales ([ADR-005](../adr/ADR-005-saga-orquestada.md)). Siguen vigentes las reglas de esta página: hay plazo en todas las llamadas (Pagos 2 s, Despacho 1,5 s, Inventory 800 ms), no hay retries automáticos de transporte y todos los comandos son idempotentes por `orderId`.
+
+Lo que cambia respecto de la T1:
+
+- El avance de cada venta se guarda en `sale_sagas`. Antes de enviar cada comando, el paso se marca `IN_DOUBT`.
+- Si la persistencia local falla después de confirmarse los tres pasos remotos, ya no se compensa: se reintenta sólo la transacción local (recuperación hacia adelante).
+- Un paso en duda se resuelve con un reintento de la misma key (hacia adelante) o, pasado `SAGA_ABORT_AFTER_MS`, con el recuperador interno de Sales (hacia atrás).
+- Las compensaciones no confirmadas se reintentan con backoff exponencial y en orden inverso estricto.
+- La claim de idempotencia ya no se mantiene bloqueada durante las llamadas remotas. La serialización de reintentos concurrentes pasa a un lease por venta (`lease_owner`, `lease_until`).
+
+El detalle está en [P3-SAGA.md](../t2/P3-SAGA.md).

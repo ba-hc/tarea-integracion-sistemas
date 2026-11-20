@@ -72,6 +72,17 @@ Se propone REST interno con el mismo `orderId` como identificador de un único c
 
 P2 debe acordar con P3 las rutas y códigos definitivos, la moneda y el origen del importe. Los contratos actuales no incluyen precios. También queda por acordar cómo guardar y consultar el resultado incierto de la pasarela. Como base, `CHARGED`, `DECLINED` y `REFUNDED` representan resultados confirmados, y `202` con `PENDING` o `REFUND_PENDING` indica que la operación sigue por confirmar. El cobro y el reembolso necesitan claves estables distintas entre sí y reutilizables en sus respectivos reintentos contra la pasarela.
 
+### Lo que Ventas (P3) ya consume
+
+El cliente de Pagos de Ventas (`apps/sales-api/src/saga/payments.client.ts`) implementa esta propuesta. Para cerrarla, P3 fijó con el equipo:
+
+- **Importe:** unidades × `SALE_UNIT_PRICE_MINOR` (10 000 por defecto), en `CLP`. Se guarda en la Saga al crearla.
+- **Fallback del Circuit Breaker / Bulkhead:** `503` con `code: "PAYMENT_CHARGE_REJECTED"` cuando Pagos rechaza antes de contactar a la pasarela. Garantiza que no hubo cobro, y Ventas libera el stock de inmediato. Un `503` sin ese código se trata como resultado incierto.
+- **Plazo:** Ventas espera 2 s (`PAYMENTS_TIMEOUT_MS`). El timeout de Pagos hacia la pasarela debe ser menor.
+- **Resultado incierto:** `202 PENDING` o `REFUND_PENDING`, como arriba. Ventas repite el mismo comando o, al abortar, reembolsa y acepta `404` sólo si el cobro estaba en duda.
+
+El detalle está en [P3-SAGA.md §6](../t2/P3-SAGA.md#6-contrato-que-ventas-espera-de-pagos-para-p2). Pagos sigue pendiente de integración.
+
 ## Decisiones ante una falla
 
 - Un rechazo de negocio confirmado permite actuar sobre los pasos anteriores ya confirmados. En las interfaces REST nuevas, el cuerpo de error incluye `code`, `message` y `traceId`.
