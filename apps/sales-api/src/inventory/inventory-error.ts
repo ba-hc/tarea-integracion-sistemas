@@ -11,7 +11,13 @@ import { ApiError } from '../common/api-error.js';
 // cliente ni se adjunta como `details`.
 
 /** Llamada de Inventory de la que provino la falla. */
-export type InventoryOperation = 'reserve' | 'release' | 'read';
+export type InventoryOperation = 'reserve' | 'release' | 'compensate' | 'read';
+
+/**
+ * Código interno (nunca público) para `ReleaseStock` con `NOT_FOUND` durante una
+ * compensación: Inventory confirma que el `order_id` nunca tuvo reserva.
+ */
+export const RESERVATION_NOT_FOUND_CODE = 'RESERVATION_NOT_FOUND';
 
 interface ErrorMapping {
   status: number;
@@ -82,6 +88,17 @@ const PER_OPERATION: Readonly<Record<InventoryOperation, Readonly<Record<number,
   release: {
     [GrpcStatus.INVALID_ARGUMENT]: INTERNAL,
     [GrpcStatus.NOT_FOUND]: INTERNAL,
+    [GrpcStatus.FAILED_PRECONDITION]: INTERNAL,
+  },
+  // Compensación de la Saga: si la reserva estaba en duda, NOT_FOUND confirma
+  // que nunca se aplicó. El orquestador decide; este código no llega a REST.
+  compensate: {
+    [GrpcStatus.INVALID_ARGUMENT]: INTERNAL,
+    [GrpcStatus.NOT_FOUND]: {
+      status: 404,
+      code: RESERVATION_NOT_FOUND_CODE,
+      message: 'Inventory has no reservation for this order',
+    },
     [GrpcStatus.FAILED_PRECONDITION]: INTERNAL,
   },
   read: {

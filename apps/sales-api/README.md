@@ -21,6 +21,16 @@ npm start
 provided through the environment or an untracked `.env`. Never use demo keys outside a
 local machine. `INVENTORY_RPC_DEADLINE_MS` defaults to 800 ms; gRPC retries are disabled.
 
+## T2: sale saga
+
+`POST /v1/orders` runs the sale as a Saga orchestrated by Sales: reserve stock (Inventory gRPC) →
+charge (Payments REST) → create dispatch (Dispatch REST). Rejections are compensated in reverse
+order, and in-doubt steps are resumed by a same-key retry or aborted by the in-process recovery
+worker. State lives in `sale_sagas` and `sale_saga_events`. Configuration (`SAGA_STEPS`,
+`PAYMENTS_*`, `DISPATCH_*`, `SALE_UNIT_PRICE_MINOR`, `SALE_CURRENCY`, `SAGA_*`) and the full
+design are in `../../docs/t2/P3-SAGA.md`; the decision record is
+`../../docs/adr/ADR-005-saga-orquestada.md`.
+
 ## API
 
 The frozen REST contract is `../../contracts/rest/openapi.yaml`. `/v1/health` is public.

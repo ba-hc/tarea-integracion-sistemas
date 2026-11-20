@@ -14,6 +14,8 @@ const config: SalesConfig = {
   inventoryGrpcUrl: 'localhost:50051',
   inventoryRpcDeadlineMs: 800,
   inventoryProtoPath: '/contract/inventory.proto',
+  // El guard no usa la configuración de la Saga.
+  saga: {} as SalesConfig['saga'],
 };
 
 function executionContext(method: string, key?: string, handler: () => void = () => undefined): ExecutionContext {

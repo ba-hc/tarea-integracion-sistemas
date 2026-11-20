@@ -11,5 +11,5 @@ export function testDatabaseUrl(): string {
 }
 
 export async function resetDatabase(prisma: PrismaService): Promise<void> {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "idempotency_requests", "order_items", "orders", "customers" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "sale_saga_events", "sale_sagas", "idempotency_requests", "order_items", "orders", "customers" CASCADE');
 }

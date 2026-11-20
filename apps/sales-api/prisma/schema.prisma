@@ -80,5 +80,82 @@ model IdempotencyRequest {
   createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  saga SaleSaga?
+
   @@map("idempotency_requests")
+}
+
+// --- T2: Saga de venta (orquestación en Sales) -------------------------------
+// Estado interno de la venta. Nunca se expone por REST: el público sólo ve
+// órdenes CONFIRMED/CANCELLED. Ver docs/t2/P3-SAGA.md.
+
+enum SaleSagaStatus {
+  RUNNING
+  COMPENSATING
+  COMPLETED
+  FAILED
+  CANCELLING
+  CANCELLED
+
+  @@map("sale_saga_status")
+}
+
+enum SaleSagaStepStatus {
+  SKIPPED
+  NOT_STARTED
+  IN_DOUBT
+  DONE
+  REJECTED
+  COMPENSATED
+
+  @@map("sale_saga_step_status")
+}
+
+model SaleSaga {
+  orderId              String             @id @map("order_id") @db.Uuid
+  idempotencyKey       String             @unique @map("idempotency_key") @db.VarChar(128)
+  customerId           String             @map("customer_id") @db.Uuid
+  items                Json
+  amountMinor          BigInt             @map("amount_minor")
+  currency             String             @db.Char(3)
+  status               SaleSagaStatus
+  stockStatus          SaleSagaStepStatus @map("stock_status")
+  paymentStatus        SaleSagaStepStatus @map("payment_status")
+  dispatchStatus       SaleSagaStepStatus @map("dispatch_status")
+  reservation          Json?
+  failureStatus        Int?               @map("failure_status")
+  failureCode          String?            @map("failure_code") @db.VarChar(64)
+  failureMessage       String?            @map("failure_message") @db.VarChar(200)
+  lastErrorStatus      Int?               @map("last_error_status")
+  lastErrorCode        String?            @map("last_error_code") @db.VarChar(64)
+  lastErrorMessage     String?            @map("last_error_message") @db.VarChar(200)
+  compensationAttempts Int                @default(0) @map("compensation_attempts")
+  nextAttemptAt        DateTime?          @map("next_attempt_at") @db.Timestamptz(3)
+  leaseOwner           String?            @map("lease_owner") @db.Uuid
+  leaseUntil           DateTime?          @map("lease_until") @db.Timestamptz(3)
+  createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  idempotencyRequest IdempotencyRequest @relation(fields: [idempotencyKey], references: [key], onDelete: Restrict)
+  events             SaleSagaEvent[]
+
+  @@index([status, nextAttemptAt])
+  @@index([status, updatedAt])
+  @@map("sale_sagas")
+}
+
+model SaleSagaEvent {
+  id        BigInt   @id @default(autoincrement())
+  orderId   String   @map("order_id") @db.Uuid
+  step      String   @db.VarChar(16)
+  action    String   @db.VarChar(16)
+  outcome   String   @db.VarChar(16)
+  code      String?  @db.VarChar(64)
+  traceId   String?  @map("trace_id") @db.VarChar(128)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  saga SaleSaga @relation(fields: [orderId], references: [orderId], onDelete: Restrict)
+
+  @@index([orderId, id])
+  @@map("sale_saga_events")
 }

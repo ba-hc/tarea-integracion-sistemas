@@ -2,24 +2,24 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client.js';
 import { ApiError } from '../common/api-error.js';
-import { SALES_CONFIG, type SalesConfig } from '../config/app-config.js';
 import { PrismaService } from '../database/prisma.service.js';
-import { INVENTORY_GATEWAY, type InventoryGateway, type ReservedStockItem } from '../inventory/inventory.gateway.js';
+import { INVENTORY_GATEWAY, type InventoryGateway } from '../inventory/inventory.gateway.js';
+import { SaleSagaOrchestrator } from '../saga/sale-saga.orchestrator.js';
 import type { OrderCreateDto, OrderListQueryDto } from './order.dto.js';
 import { toOrderView, type OrderView } from './order.mapper.js';
-
-const ORDER_INCLUDE = { items: { orderBy: { partId: 'asc' } } } as const;
+import { ORDER_INCLUDE, restoreCreateResponse, storedFailure } from './order-response.js';
 
 interface CreateOrderSuccess {
   kind: 'success';
   order: OrderView;
   replayed: boolean;
 }
-interface CreateOrderError {
-  kind: 'error';
-  error: ApiError;
-}
-type CreateOrderOutcome = CreateOrderSuccess | CreateOrderError;
+
+/** Resultado del paso local que reclama la Idempotency-Key antes de tocar otros servicios. */
+type ClaimOutcome =
+  | CreateOrderSuccess
+  | { kind: 'error'; error: ApiError }
+  | { kind: 'run'; orderId: string };
 
 function normalizeItems(items: OrderCreateDto['items']): Array<{ partId: string; quantity: number }> {
   return items
@@ -36,76 +36,6 @@ function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
-function publicInventoryError(error: unknown): ApiError {
-  return error instanceof ApiError
-    ? error
-    : new ApiError(500, 'INTERNAL_ERROR', 'An unexpected internal error occurred');
-}
-
-function storedFailure(status: number | null, body: Prisma.JsonValue | null): ApiError {
-  const fallback = new ApiError(500, 'INTERNAL_ERROR', 'An unexpected internal error occurred');
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return fallback;
-  const code = body.code;
-  const message = body.message;
-  if (typeof code !== 'string' || typeof message !== 'string') return fallback;
-  return new ApiError(status ?? 500, code, message);
-}
-
-function createResponseBody(order: OrderView): Prisma.InputJsonValue {
-  return {
-    id: order.id,
-    customerId: order.customerId,
-    status: 'CONFIRMED',
-    items: order.items.map((item) => ({
-      partId: item.partId,
-      sku: item.sku,
-      name: item.name,
-      quantity: item.quantity,
-    })),
-    createdAt: order.createdAt.toISOString(),
-    updatedAt: order.updatedAt.toISOString(),
-    cancelledAt: null,
-  };
-}
-
-function restoreCreateResponse(body: Prisma.JsonValue | null, current: OrderView): OrderView {
-  const snapshot = body && typeof body === 'object' && !Array.isArray(body)
-    ? body as Prisma.JsonObject
-    : undefined;
-  const createdAt = snapshot?.createdAt;
-  const updatedAt = snapshot?.updatedAt;
-  const parseDate = (value: Prisma.JsonValue | undefined, fallback: Date): Date => {
-    if (typeof value !== 'string') return fallback;
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? fallback : date;
-  };
-  return {
-    ...current,
-    status: 'CONFIRMED',
-    createdAt: parseDate(createdAt, current.createdAt),
-    updatedAt: parseDate(updatedAt, current.createdAt),
-    cancelledAt: null,
-  };
-}
-
-function internalCreateFailure(): ApiError {
-  return new ApiError(500, 'INTERNAL_ERROR', 'An unexpected internal error occurred');
-}
-
-function assertReservationMatches(
-  requested: Array<{ partId: string; quantity: number }>,
-  reserved: ReservedStockItem[],
-): void {
-  if (requested.length !== reserved.length) throw new Error('Inventory reservation result did not match request');
-  const byPart = new Map(reserved.map((item) => [item.partId.toLowerCase(), item]));
-  for (const requestItem of requested) {
-    const snapshot = byPart.get(requestItem.partId);
-    if (!snapshot || snapshot.quantity !== requestItem.quantity) {
-      throw new Error('Inventory reservation result did not match request');
-    }
-  }
-}
-
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -113,81 +43,17 @@ export class OrdersService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(INVENTORY_GATEWAY) private readonly inventory: InventoryGateway,
-    @Inject(SALES_CONFIG) private readonly config: SalesConfig,
+    @Inject(SaleSagaOrchestrator) private readonly saga: SaleSagaOrchestrator,
   ) {}
 
-  private async recoverFailedCreate(
-    idempotencyKey: string,
-    traceId: string,
-  ): Promise<CreateOrderOutcome> {
-    const prepared = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT "key" FROM "idempotency_requests" WHERE "key" = ${idempotencyKey} FOR UPDATE`;
-      const entry = await tx.idempotencyRequest.findUnique({ where: { key: idempotencyKey } });
-      if (!entry) throw new Error('Idempotency claim disappeared during compensation');
-      if (entry.state === 'CONFIRMED') {
-        const order = await tx.order.findUnique({ where: { id: entry.orderId }, include: ORDER_INCLUDE });
-        if (!order) throw new Error('Confirmed idempotency record has no order');
-        return {
-          kind: 'success' as const,
-          order: restoreCreateResponse(entry.responseBody, toOrderView(order)),
-          replayed: true,
-        };
-      }
-      if (entry.state === 'FAILED') {
-        return { kind: 'error' as const, error: storedFailure(entry.responseStatus, entry.responseBody) };
-      }
-      if (entry.state === 'IN_PROGRESS') {
-        const error = internalCreateFailure();
-        await tx.idempotencyRequest.update({
-          where: { key: idempotencyKey },
-          data: {
-            state: 'COMPENSATING',
-            responseStatus: error.getStatus(),
-            responseBody: { code: error.code, message: error.message },
-          },
-        });
-      }
-      return { kind: 'compensating' as const };
-    }, {
-      isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
-      maxWait: 5_000,
-      timeout: this.config.inventoryRpcDeadlineMs + 10_000,
-    });
-    if (prepared.kind !== 'compensating') return prepared;
-
-    return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT "key" FROM "idempotency_requests" WHERE "key" = ${idempotencyKey} FOR UPDATE`;
-      const entry = await tx.idempotencyRequest.findUnique({ where: { key: idempotencyKey } });
-      if (!entry) throw new Error('Idempotency claim disappeared during compensation');
-      if (entry.state === 'CONFIRMED') {
-        const order = await tx.order.findUnique({ where: { id: entry.orderId }, include: ORDER_INCLUDE });
-        if (!order) throw new Error('Confirmed idempotency record has no order');
-        return {
-          kind: 'success' as const,
-          order: restoreCreateResponse(entry.responseBody, toOrderView(order)),
-          replayed: true,
-        };
-      }
-      if (entry.state === 'FAILED') {
-        return { kind: 'error' as const, error: storedFailure(entry.responseStatus, entry.responseBody) };
-      }
-      if (entry.state !== 'COMPENSATING') {
-        throw new Error('Idempotency compensation state changed unexpectedly');
-      }
-      const error = storedFailure(entry.responseStatus, entry.responseBody);
-      await this.inventory.release(entry.orderId, traceId);
-      await tx.idempotencyRequest.update({
-        where: { key: idempotencyKey },
-        data: { state: 'FAILED' },
-      });
-      return { kind: 'error' as const, error };
-    }, {
-      isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
-      maxWait: 5_000,
-      timeout: this.config.inventoryRpcDeadlineMs + 10_000,
-    });
-  }
-
+  /**
+   * `POST /v1/orders`: la operación «vender un repuesto».
+   *
+   * 1. Reclama la Idempotency-Key en una transacción local corta, sin llamadas
+   *    remotas mientras se tiene el lock: conflicto, replay o error guardado se
+   *    resuelven aquí. Una key nueva crea la Saga con un `orderId` estable.
+   * 2. La Saga reserva, cobra y despacha (o compensa) fuera de esa transacción.
+   */
   async create(
     body: OrderCreateDto,
     idempotencyKey: string | undefined,
@@ -200,7 +66,6 @@ export class OrdersService {
     }
 
     const customerId = body.customerId.toLowerCase();
-
     const items = normalizeItems(body.items);
     const requestHash = hashRequest(customerId, items);
     try {
@@ -211,141 +76,89 @@ export class OrdersService {
       if (!isUniqueViolation(error)) throw error;
     }
 
-    let reservationOrderId: string | undefined;
-    let reservationSucceeded = false;
-    let outcome: CreateOrderOutcome;
-    try {
-      outcome = await this.prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT "key" FROM "idempotency_requests" WHERE "key" = ${idempotencyKey} FOR UPDATE`;
-        const entry = await tx.idempotencyRequest.findUnique({ where: { key: idempotencyKey } });
-        if (!entry) throw new Error('Idempotency claim disappeared');
-        if (entry.requestHash !== requestHash) {
-          return { kind: 'error', error: new ApiError(409, 'IDEMPOTENCY_KEY_CONFLICT', 'This Idempotency-Key was already used with a different request payload') };
-        }
-        if (entry.state === 'CONFIRMED') {
-          const order = await tx.order.findUnique({ where: { id: entry.orderId }, include: ORDER_INCLUDE });
-          if (!order) throw new Error('Confirmed idempotency record has no order');
-          return {
-            kind: 'success',
-            order: restoreCreateResponse(entry.responseBody, toOrderView(order)),
-            replayed: true,
-          };
-        }
-        if (entry.state === 'FAILED') {
-          return {
-            kind: 'error',
-            error: storedFailure(entry.responseStatus, entry.responseBody),
-          };
-        }
-        if (entry.state === 'COMPENSATING') {
-          const error = storedFailure(entry.responseStatus, entry.responseBody);
-          await this.inventory.release(entry.orderId, traceId);
-          await tx.idempotencyRequest.update({
-            where: { key: idempotencyKey },
-            data: { state: 'FAILED' },
-          });
-          return { kind: 'error', error };
-        }
-        const customer = await tx.customer.findUnique({ where: { id: customerId }, select: { id: true } });
-        if (!customer) {
-          const error = new ApiError(404, 'CUSTOMER_NOT_FOUND', 'Customer not found');
-          await tx.idempotencyRequest.update({
-            where: { key: idempotencyKey },
-            data: {
-              state: 'FAILED',
-              responseStatus: error.getStatus(),
-              responseBody: { code: error.code, message: error.message },
-            },
-          });
-          return { kind: 'error', error };
-        }
+    const claim = await this.claim(idempotencyKey, requestHash, customerId, items);
+    if (claim.kind === 'success') return claim;
+    if (claim.kind === 'error') throw claim.error;
 
-        reservationOrderId = entry.orderId;
-        let snapshots: ReservedStockItem[];
-        try {
-          snapshots = await this.inventory.reserve(entry.orderId, items, traceId);
-        } catch (error) {
-          const apiError = publicInventoryError(error);
-          const ambiguousFailure = !(error instanceof ApiError) || apiError.getStatus() >= 500;
-          if (ambiguousFailure) return { kind: 'error', error: apiError };
-          await tx.idempotencyRequest.update({
-            where: { key: idempotencyKey },
-            data: {
-              state: 'FAILED',
-              responseStatus: apiError.getStatus(),
-              responseBody: { code: apiError.code, message: apiError.message },
-            },
-          });
-          return { kind: 'error', error: apiError };
-        }
+    const result = await this.saga.runSale(claim.orderId, traceId);
+    if (result.kind === 'error') throw result.error;
+    return result;
+  }
 
-        reservationSucceeded = true;
-        assertReservationMatches(items, snapshots);
-        const order = await tx.order.create({
+  private claim(
+    idempotencyKey: string,
+    requestHash: string,
+    customerId: string,
+    items: Array<{ partId: string; quantity: number }>,
+  ): Promise<ClaimOutcome> {
+    return this.prisma.$transaction(async (tx): Promise<ClaimOutcome> => {
+      await tx.$queryRaw`SELECT "key" FROM "idempotency_requests" WHERE "key" = ${idempotencyKey} FOR UPDATE`;
+      const entry = await tx.idempotencyRequest.findUnique({ where: { key: idempotencyKey } });
+      if (!entry) throw new Error('Idempotency claim disappeared');
+      if (entry.requestHash !== requestHash) {
+        return { kind: 'error', error: new ApiError(409, 'IDEMPOTENCY_KEY_CONFLICT', 'This Idempotency-Key was already used with a different request payload') };
+      }
+      if (entry.state === 'CONFIRMED') {
+        const order = await tx.order.findUnique({ where: { id: entry.orderId }, include: ORDER_INCLUDE });
+        if (!order) throw new Error('Confirmed idempotency record has no order');
+        return { kind: 'success', order: restoreCreateResponse(entry.responseBody, toOrderView(order)), replayed: true };
+      }
+      if (entry.state === 'FAILED') {
+        return { kind: 'error', error: storedFailure(entry.responseStatus, entry.responseBody) };
+      }
+
+      // IN_PROGRESS o COMPENSATING: la venta sigue viva y la avanza la Saga.
+      const existing = await tx.saleSaga.findUnique({ where: { orderId: entry.orderId }, select: { orderId: true } });
+      if (existing) return { kind: 'run', orderId: entry.orderId };
+
+      const amountMinor = this.saga.amountFor(items);
+      if (entry.state === 'COMPENSATING') {
+        // Claim heredado de la T1 (anterior a la Saga): sólo pudo haber reservado stock.
+        const failure = storedFailure(entry.responseStatus, entry.responseBody);
+        await tx.saleSaga.create({
           data: {
-            id: entry.orderId,
+            orderId: entry.orderId,
+            idempotencyKey,
             customerId,
-            status: 'CONFIRMED',
-            items: {
-              create: snapshots.map((item) => ({
-                partId: item.partId.toLowerCase(),
-                partSkuSnapshot: item.sku,
-                partNameSnapshot: item.name,
-                quantity: item.quantity,
-              })),
-            },
+            items,
+            amountMinor,
+            currency: this.saga.currency,
+            status: 'COMPENSATING',
+            stockStatus: 'IN_DOUBT',
+            paymentStatus: 'SKIPPED',
+            dispatchStatus: 'SKIPPED',
+            failureStatus: failure.getStatus(),
+            failureCode: failure.code,
+            failureMessage: failure.message,
           },
-          include: ORDER_INCLUDE,
         });
-        const orderView = toOrderView(order);
+        return { kind: 'run', orderId: entry.orderId };
+      }
+
+      const customer = await tx.customer.findUnique({ where: { id: customerId }, select: { id: true } });
+      if (!customer) {
+        const error = new ApiError(404, 'CUSTOMER_NOT_FOUND', 'Customer not found');
         await tx.idempotencyRequest.update({
           where: { key: idempotencyKey },
-          data: { state: 'CONFIRMED', responseStatus: 201, responseBody: createResponseBody(orderView) },
+          data: { state: 'FAILED', responseStatus: error.getStatus(), responseBody: { code: error.code, message: error.message } },
         });
-        return { kind: 'success', order: orderView, replayed: false };
-      }, {
-        isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
-        maxWait: 5_000,
-        timeout: this.config.inventoryRpcDeadlineMs + 10_000,
-      });
-    } catch (error) {
-      let recoveryOutcome: CreateOrderOutcome | undefined;
-      if (reservationSucceeded && reservationOrderId) {
-        try {
-          recoveryOutcome = await this.recoverFailedCreate(idempotencyKey, traceId);
-        } catch (compensationError) {
-          const errorCode = compensationError instanceof ApiError
-            ? compensationError.code
-            : compensationError instanceof Prisma.PrismaClientKnownRequestError
-              ? compensationError.code
-              : undefined;
-          this.logger.error('inventory reservation compensation failed', {
-            traceId,
-            orderId: reservationOrderId,
-            errorType: compensationError instanceof Error ? compensationError.name : 'UnknownError',
-            ...(errorCode === undefined ? {} : { errorCode }),
-          });
-        }
+        return { kind: 'error', error };
       }
-      const errorCode = error instanceof ApiError
-        ? error.code
-        : error instanceof Prisma.PrismaClientKnownRequestError
-          ? error.code
-          : undefined;
-      this.logger.error('order creation failed', {
-        traceId,
-        orderId: reservationOrderId,
-        errorType: error instanceof Error ? error.name : 'UnknownError',
-        ...(errorCode === undefined ? {} : { errorCode }),
-        recoveredState: recoveryOutcome?.kind,
-      });
-      if (recoveryOutcome?.kind === 'success') return recoveryOutcome;
-      if (recoveryOutcome?.kind === 'error') throw recoveryOutcome.error;
-      throw internalCreateFailure();
-    }
 
-    if (outcome.kind === 'error') throw outcome.error;
-    return outcome;
+      await tx.saleSaga.create({
+        data: {
+          orderId: entry.orderId,
+          idempotencyKey,
+          customerId,
+          items,
+          amountMinor,
+          currency: this.saga.currency,
+          status: 'RUNNING',
+          ...this.saga.initialStepStatuses(),
+        },
+      });
+      return { kind: 'run', orderId: entry.orderId };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 5_000, timeout: 10_000 });
   }
 
   async list(query: OrderListQueryDto): Promise<{ page: number; pageSize: number; total: number; items: OrderView[] }> {
@@ -374,12 +187,24 @@ export class OrdersService {
     return toOrderView(order);
   }
 
+  /**
+   * `POST /v1/orders/{orderId}/cancel`. Una orden vendida por la Saga se
+   * cancela compensando despacho → pago → stock y sólo entonces pasa a
+   * CANCELLED. Las órdenes creadas antes de la T2 no tienen Saga y conservan
+   * la cancelación de la T1 (liberar stock).
+   */
   async cancel(orderId: string, traceId: string): Promise<OrderView> {
     const id = orderId.toLowerCase();
     const current = await this.prisma.order.findUnique({ where: { id }, include: ORDER_INCLUDE });
     if (!current) throw new ApiError(404, 'ORDER_NOT_FOUND', 'Order not found');
     if (current.status === 'CANCELLED') return toOrderView(current);
 
+    const hasSaga = await this.prisma.saleSaga.count({ where: { orderId: id } });
+    if (hasSaga > 0) return this.saga.cancelSale(id, traceId);
+    return this.cancelWithoutSaga(id, traceId);
+  }
+
+  private async cancelWithoutSaga(id: string, traceId: string): Promise<OrderView> {
     await this.inventory.release(id, traceId);
     try {
       return await this.prisma.$transaction(async (tx) => {

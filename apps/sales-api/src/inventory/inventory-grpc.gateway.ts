@@ -1,7 +1,13 @@
 import { Metadata, type CallOptions } from '@grpc/grpc-js';
 import { Inject, Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import { SALES_CONFIG, type SalesConfig } from '../config/app-config.js';
-import { grpcStatusName, toInventoryApiError, type InventoryOperation } from './inventory-error.js';
+import { ApiError } from '../common/api-error.js';
+import {
+  grpcStatusName,
+  RESERVATION_NOT_FOUND_CODE,
+  toInventoryApiError,
+  type InventoryOperation,
+} from './inventory-error.js';
 import { INVENTORY_SERVICE_CLIENT, type InventoryServiceClient, type UnaryMethod } from './inventory-service-client.js';
 import {
   type GetPartRequest,
@@ -36,17 +42,19 @@ const EMPTY_RESPONSE_MESSAGE = 'inventory gRPC call returned no response';
 
 /** Nombres de las RPC que se registran en los logs, tal como en el .proto. */
 type InventoryRpcName = 'GetPart' | 'ListParts' | 'ReserveStock' | 'ReleaseStock';
+type InventoryCallName = InventoryRpcName | 'ReleaseStockCompensation';
 
 /**
  * La traducción de los estados ambiguos depende de la llamada (ver
  * inventory-error.ts): liberar una orden reutiliza el order_id que ya validó
  * Sales, mientras que reservar o leer reciben identificadores del llamador.
  */
-const OPERATION_BY_RPC: Readonly<Record<InventoryRpcName, InventoryOperation>> = {
+const OPERATION_BY_RPC: Readonly<Record<InventoryCallName, InventoryOperation>> = {
   GetPart: 'read',
   ListParts: 'read',
   ReserveStock: 'reserve',
   ReleaseStock: 'release',
+  ReleaseStockCompensation: 'compensate',
 };
 
 /** Identificadores de la llamada que se registran; nunca el payload completo. */
@@ -103,6 +111,22 @@ export class InventoryGrpcGateway implements InventoryGateway, OnModuleDestroy {
     );
   }
 
+  async releaseForCompensation(orderId: string, traceId: string): Promise<'RELEASED' | 'NO_RESERVATION'> {
+    try {
+      await this.invoke<ReleaseStockRequest, ReleaseStockResponse>(
+        this.client.ReleaseStock,
+        'ReleaseStockCompensation',
+        { order_id: orderId },
+        { orderId },
+        traceId,
+      );
+      return 'RELEASED';
+    } catch (error) {
+      if (error instanceof ApiError && error.code === RESERVATION_NOT_FOUND_CODE) return 'NO_RESERVATION';
+      throw error;
+    }
+  }
+
   /** Lectura informativa: nunca autoriza una venta por sí sola (RELIABILITY.md). */
   async getPart(partId: string, traceId: string): Promise<PartSnapshot> {
     const response = await this.invoke<GetPartRequest, GetPartResponse>(
@@ -151,11 +175,12 @@ export class InventoryGrpcGateway implements InventoryGateway, OnModuleDestroy {
    */
   private invoke<Request, Response>(
     rpc: UnaryMethod<Request, Response>,
-    method: InventoryRpcName,
+    call: InventoryCallName,
     request: Request,
     context: InventoryCallContext,
     traceId: string,
   ): Promise<Response> {
+    const method: InventoryRpcName = call === 'ReleaseStockCompensation' ? 'ReleaseStock' : call;
     const trimmedTraceId = traceId.trim();
     const safeTraceId = TRACE_ID_PATTERN.test(trimmedTraceId) ? trimmedTraceId : undefined;
 
@@ -174,7 +199,7 @@ export class InventoryGrpcGateway implements InventoryGateway, OnModuleDestroy {
 
         if (error !== null || response === undefined) {
           const failure: unknown = error ?? new Error(EMPTY_RESPONSE_MESSAGE);
-          const apiError = toInventoryApiError(failure, OPERATION_BY_RPC[method]);
+          const apiError = toInventoryApiError(failure, OPERATION_BY_RPC[call]);
           const httpStatus = apiError.getStatus();
           const fields = {
             method,

@@ -50,6 +50,12 @@ export interface InventoryGateway {
   release(orderId: string, traceId: string): Promise<void>;
 
   /**
+   * Compensación de la Saga: como `release`, pero distingue una orden que
+   * nunca tuvo reserva (`NO_RESERVATION`) en lugar de tratarla como falla.
+   */
+  releaseForCompensation(orderId: string, traceId: string): Promise<'RELEASED' | 'NO_RESERVATION'>;
+
+  /**
    * Pieza y stock disponible actuales. Lectura informativa: un valor leído aquí
    * nunca autoriza una venta (RELIABILITY.md); sólo `reserve` lo hace.
    */
