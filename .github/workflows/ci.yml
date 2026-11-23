@@ -154,6 +154,62 @@ jobs:
         working-directory: apps/sales-api
         run: npm run build
 
+  payments:
+    name: Payments quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: payments
+          POSTGRES_PASSWORD: payments-test-only
+          POSTGRES_DB: payments_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U payments -d payments_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://payments:payments-test-only@localhost:5432/payments_test?schema=public
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/payments-api/package-lock.json
+
+      - name: Payment gateway simulator tests
+        working-directory: apps/payment-gateway-sim
+        run: npm test
+
+      - name: Install dependencies
+        working-directory: apps/payments-api
+        run: npm ci --no-audit --no-fund
+      - name: Generate Prisma client
+        working-directory: apps/payments-api
+        run: npm run prisma:generate
+
+      - name: Typecheck
+        working-directory: apps/payments-api
+        run: npm run typecheck
+
+      - name: Unit tests
+        working-directory: apps/payments-api
+        run: npm test
+
+      - name: PostgreSQL integration tests
+        working-directory: apps/payments-api
+        run: npm run test:integration
+
+      - name: Build
+        working-directory: apps/payments-api
+        run: npm run build
+
   system:
     name: Black-box and dependency-failure tests
     runs-on: ubuntu-latest
