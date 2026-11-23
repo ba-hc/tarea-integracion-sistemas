@@ -27,6 +27,28 @@ const PART_ID = '33333333-3333-4333-8333-333333333333';
 const SALES_TRACE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const BFF_TRACE = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
+interface P3ErrorCase {
+  readonly status: number;
+  readonly code: string;
+  readonly message: string;
+  readonly details: Readonly<Record<string, unknown>>;
+}
+
+const P3_CREATE_ERRORS: readonly P3ErrorCase[] = [
+  { status: 422, code: 'PAYMENT_DECLINED', message: 'The payment was declined', details: { step: 'payment', result: 'declined' } },
+  { status: 503, code: 'PAYMENT_UNAVAILABLE', message: 'Payment service is unavailable', details: { step: 'payment', result: 'unavailable' } },
+  { status: 503, code: 'DISPATCH_UNAVAILABLE', message: 'Dispatch service is unavailable', details: { step: 'dispatch', result: 'unavailable' } },
+  { status: 504, code: 'PAYMENT_TIMEOUT', message: 'Payment service did not respond before the deadline', details: { step: 'payment', result: 'timeout' } },
+  { status: 504, code: 'DISPATCH_TIMEOUT', message: 'Dispatch service did not respond before the deadline', details: { step: 'dispatch', result: 'timeout' } },
+];
+
+const P3_CANCEL_ERRORS: readonly P3ErrorCase[] = [
+  { status: 503, code: 'PAYMENT_UNAVAILABLE', message: 'Payment service is unavailable', details: { step: 'payment', result: 'unavailable' } },
+  { status: 503, code: 'DISPATCH_UNAVAILABLE', message: 'Dispatch service is unavailable', details: { step: 'dispatch', result: 'unavailable' } },
+  { status: 504, code: 'PAYMENT_TIMEOUT', message: 'Payment service did not respond before the deadline', details: { step: 'payment', result: 'timeout' } },
+  { status: 504, code: 'DISPATCH_TIMEOUT', message: 'Dispatch service did not respond before the deadline', details: { step: 'dispatch', result: 'timeout' } },
+];
+
 function pathOf(url: string): string {
   return url.split('?', 1)[0] ?? url;
 }
@@ -423,6 +445,76 @@ describe('API Gateway integration', () => {
     expect(response.json).toEqual({ code, message: 'Sales error', traceId: SALES_TRACE });
     expect(response.headers.get('x-trace-id')).toBe(SALES_TRACE);
     expect(sales.requests).toHaveLength(1);
+  });
+
+  it.each(P3_CREATE_ERRORS)('preserves P3 create error $code through the proxy', async ({
+    status,
+    code,
+    message,
+    details,
+  }) => {
+    sales.setHandler((_stubRequest, response) => {
+      jsonResponse(
+        response,
+        status,
+        { code, message, traceId: SALES_TRACE, details },
+        { 'X-Trace-Id': SALES_TRACE },
+      );
+    });
+    const operator = await tokenFor(config, 'p3-operator', 'operator');
+    const idempotencyKey = `p3-create-${code}`;
+    const orderBody = JSON.stringify({
+      customerId: CUSTOMER_ID,
+      items: [{ partId: PART_ID, quantity: 1 }],
+    });
+    const response = await request(gateway.url, '/v1/orders', {
+      method: 'POST',
+      headers: { ...jsonHeaders(operator), 'Idempotency-Key': idempotencyKey },
+      body: orderBody,
+    });
+
+    expect(response.status).toBe(status);
+    expect(response.json).toEqual({ code, message, traceId: SALES_TRACE, details });
+    expect(response.headers.get('x-trace-id')).toBe(SALES_TRACE);
+    expect(sales.requests).toHaveLength(1);
+    const upstream = sales.requests[0];
+    expect(upstream?.method).toBe('POST');
+    expect(upstream?.url).toBe('/v1/orders');
+    expect(upstream?.headers['idempotency-key']).toBe(idempotencyKey);
+    expect(upstream?.headers['x-api-key']).toBe(config.salesApiKeyOperator);
+    expect(upstream?.headers.authorization).toBeUndefined();
+    expect(upstream?.body.toString('utf8')).toBe(orderBody);
+  });
+
+  it.each(P3_CANCEL_ERRORS)('preserves P3 cancel error $code through the proxy', async ({
+    status,
+    code,
+    message,
+    details,
+  }) => {
+    sales.setHandler((_stubRequest, response) => {
+      jsonResponse(
+        response,
+        status,
+        { code, message, traceId: SALES_TRACE, details },
+        { 'X-Trace-Id': SALES_TRACE },
+      );
+    });
+    const operator = await tokenFor(config, 'p3-operator', 'operator');
+    const response = await request(gateway.url, `/v1/orders/${ORDER_ID}/cancel`, {
+      method: 'POST',
+      headers: bearer(operator),
+    });
+
+    expect(response.status).toBe(status);
+    expect(response.json).toEqual({ code, message, traceId: SALES_TRACE, details });
+    expect(response.headers.get('x-trace-id')).toBe(SALES_TRACE);
+    expect(sales.requests).toHaveLength(1);
+    const upstream = sales.requests[0];
+    expect(upstream?.method).toBe('POST');
+    expect(upstream?.url).toBe(`/v1/orders/${ORDER_ID}/cancel`);
+    expect(upstream?.headers['x-api-key']).toBe(config.salesApiKeyOperator);
+    expect(upstream?.headers.authorization).toBeUndefined();
   });
 
   it.each([401, 403])('turns an internal Sales %i into a local 503', async (status) => {
