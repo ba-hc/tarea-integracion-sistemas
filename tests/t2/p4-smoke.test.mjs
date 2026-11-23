@@ -1,12 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  PART_ID,
+  assertLoopbackBaseUrl,
+  assertStockSummary,
+  assertSummary,
   cancelDispatch,
   cancelOrder,
   cleanupArtifacts,
+  composeEnvironment,
   main,
+  parseSagaSteps,
+  readContainerEnv,
   resolveRateLimitConfig,
+  resolveSmokeMode,
+  runDocker,
   runRateLimitCheck,
+  tokenFromCli,
   windowIndex,
 } from './p4-smoke.mjs';
 
@@ -347,4 +357,250 @@ test('default limit of 60 does not retry indiscriminately without a window chang
   );
   assert.equal(requests, 61);
   assert.deepEqual(tokens, [1]);
+});
+
+test('parseSagaSteps normalizes and rejects malformed lists', () => {
+  assert.equal(parseSagaSteps(' stock, dispatch '), 'stock,dispatch');
+  assert.equal(parseSagaSteps('stock'), 'stock');
+  assert.throws(() => parseSagaSteps('stock,,dispatch'), /empty step/);
+  assert.throws(() => parseSagaSteps('stock,stock'), /duplicate/);
+  assert.throws(() => parseSagaSteps(undefined), /missing/);
+});
+
+test('resolveSmokeMode accepts only stock and stock,dispatch and fails closed on payment', () => {
+  assert.equal(resolveSmokeMode({ actual: 'stock' }), 'stock');
+  assert.equal(resolveSmokeMode({ actual: ' stock, dispatch ' }), 'stock,dispatch');
+  assert.equal(resolveSmokeMode({ actual: 'stock', expected: 'stock' }), 'stock');
+  assert.throws(
+    () => resolveSmokeMode({ actual: 'stock,payment,dispatch' }),
+    /pendiente de integración P2/,
+  );
+  assert.throws(
+    () => resolveSmokeMode({ actual: 'stock,dispatch', expected: 'full' }),
+    /pendiente de integración P2/,
+  );
+  assert.throws(
+    () => resolveSmokeMode({ actual: 'stock,dispatch', expected: 'stock' }),
+    /no coincide/,
+  );
+  assert.throws(
+    () => resolveSmokeMode({ actual: 'stock,refund' }),
+    /no soportado/,
+  );
+});
+
+test('assertLoopbackBaseUrl rejects remote or credential-bearing URLs', () => {
+  assert.equal(assertLoopbackBaseUrl('http://127.0.0.1:8081'), 'http://127.0.0.1:8081');
+  assert.equal(assertLoopbackBaseUrl('http://localhost:8080/'), 'http://localhost:8080');
+  assert.throws(() => assertLoopbackBaseUrl('https://127.0.0.1:8081'), /http/);
+  assert.throws(() => assertLoopbackBaseUrl('http://192.168.1.10:8081'), /127\.0\.0\.1 or localhost/);
+  assert.throws(() => assertLoopbackBaseUrl('http://user:secret@127.0.0.1:8081'), /credentials/);
+  assert.throws(() => assertLoopbackBaseUrl('http://127.0.0.1:8081/api'), /path/);
+  assert.throws(() => assertLoopbackBaseUrl('http://127.0.0.1'), /explicit port/);
+});
+
+test('readContainerEnv fails closed on docker exec errors or an empty value', () => {
+  let args;
+  assert.equal(readContainerEnv('sales-api', 'SAGA_STEPS', {
+    run: (nextArgs) => {
+      args = nextArgs;
+      return { status: 0, stdout: ' stock,dispatch\n' };
+    },
+  }), 'stock,dispatch');
+  assert.equal(args[0], 'exec');
+  assert.equal(args[2], 'sales-api');
+  assert.throws(
+    () => readContainerEnv('sales-api', 'SAGA_STEPS', {
+      run: () => ({ error: new Error('docker missing'), status: null, stdout: '' }),
+    }),
+    /Error/,
+  );
+  assert.throws(
+    () => readContainerEnv('sales-api', 'SAGA_STEPS', { run: () => ({ status: 1, stdout: '' }) }),
+    /exit 1/,
+  );
+  assert.throws(
+    () => readContainerEnv('sales-api', 'SAGA_STEPS', { run: () => ({ status: 0, stdout: '' }) }),
+    /empty/,
+  );
+  assert.equal(readContainerEnv('api-gateway', 'GATEWAY_RATE_LIMIT_MAX_REQUESTS', {
+    run: () => ({ status: 0, stdout: '' }),
+    allowEmpty: true,
+  }), '');
+});
+
+test('tokenFromCli fails closed and never accepts a malformed token', () => {
+  assert.equal(tokenFromCli('reader', 'p4-reader', {
+    run: () => ({ status: 0, stdout: 'a.b.c\n' }),
+  }), 'a.b.c');
+  assert.throws(
+    () => tokenFromCli('reader', 'p4-reader', { run: () => ({ status: 1, stdout: '' }) }),
+    /token CLI failed/,
+  );
+  assert.throws(
+    () => tokenFromCli('reader', 'p4-reader', { run: () => ({ status: 0, stdout: 'not-a-jwt' }) }),
+    /invalid token/,
+  );
+});
+
+test('runDocker uses shell:false and the scoped Compose environment', () => {
+  let captured;
+  const result = runDocker(['ps'], 1_000, {
+    spawn: (command, args, options) => {
+      captured = { command, args, options };
+      return { status: 0, stdout: 'ok', stderr: '' };
+    },
+    env: {
+      COMPOSE_PROJECT_NAME: 'repuestossur-p4-test',
+      COMPOSE_ENV_FILES: '/repo/.env.p4',
+    },
+  });
+  assert.equal(result.status, 0);
+  assert.equal(captured.command, 'docker');
+  assert.deepEqual(captured.args.slice(0, 5), [
+    'compose',
+    '-f',
+    'docker-compose.yml',
+    '-f',
+    'docker-compose.p4.yml',
+  ]);
+  assert.equal(captured.args.at(-1), 'ps');
+  assert.equal(captured.options.shell, false);
+  assert.equal(captured.options.env.COMPOSE_PROJECT_NAME, 'repuestossur-p4-test');
+  assert.equal(captured.options.env.COMPOSE_ENV_FILES, '/repo/.env.p4');
+});
+
+test('composeEnvironment copies COMPOSE_PROJECT_NAME and COMPOSE_ENV_FILES without mutating', () => {
+  const base = { COMPOSE_PROJECT_NAME: 'repuestossur-p4-independent', COMPOSE_ENV_FILES: '.env.p4' };
+  const copy = composeEnvironment(base);
+  assert.deepEqual(copy, base);
+  assert.notEqual(copy, base);
+  copy.COMPOSE_PROJECT_NAME = 'other';
+  assert.equal(base.COMPOSE_PROJECT_NAME, 'repuestossur-p4-independent');
+});
+
+test('assertSummary accepts the two supported stock,dispatch summaries', () => {
+  const orderId = '11111111-1111-4111-8111-111111111111';
+  const items = [{ partId: PART_ID, quantity: 1 }];
+  const created = {
+    status: 200,
+    text: '',
+    json: {
+      orderId,
+      partial: true,
+      payment: { availability: 'unavailable' },
+      dispatch: { availability: 'available', data: { orderId, status: 'CREATED', items } },
+    },
+  };
+  assert.doesNotThrow(() => assertSummary(created, {
+    statuses: [200],
+    partial: true,
+    paymentAvailability: 'unavailable',
+    dispatchAvailability: 'available',
+    dispatchStatus: 'CREATED',
+    orderId,
+    items,
+    forbidPaymentStatus: 'CHARGED',
+  }));
+  assert.throws(() => assertSummary({ ...created, json: { ...created.json, partial: false } }, {
+    statuses: [200],
+    partial: true,
+  }), /partial/);
+  assert.throws(() => assertSummary({ ...created, json: {
+    ...created.json,
+    payment: { availability: 'available', data: { status: 'CHARGED' } },
+  } }, {
+    statuses: [200],
+    paymentAvailability: 'unavailable',
+    forbidPaymentStatus: 'CHARGED',
+  }), /payment unavailable/);
+  assert.throws(() => assertSummary({ ...created, json: {
+    ...created.json,
+    dispatch: { availability: 'available', data: { orderId, status: 'CANCELLED', items } },
+  } }, {
+    statuses: [200],
+    dispatchAvailability: 'available',
+    dispatchStatus: 'CREATED',
+    orderId,
+    items,
+  }), /dispatch status/);
+});
+
+test('assertSummary validates stock-mode source codes and rejects CHARGED', () => {
+  const unavailable = {
+    status: 503,
+    text: '{"code":"UPSTREAM_UNAVAILABLE"}',
+    json: {
+      code: 'UPSTREAM_UNAVAILABLE',
+      message: 'One or more summary sources are unavailable',
+      traceId: '22222222-2222-4222-8222-222222222222',
+      details: { sources: { payment: 'unavailable', dispatch: 'not_found' } },
+    },
+  };
+  assert.doesNotThrow(() => assertSummary(unavailable, {
+    statuses: [503],
+    codes: ['UPSTREAM_UNAVAILABLE'],
+    sources: { payment: 'unavailable', dispatch: 'not_found' },
+    forbidPaymentStatus: 'CHARGED',
+  }));
+  assert.throws(() => assertSummary({ ...unavailable, json: {
+    ...unavailable.json,
+    details: { sources: { payment: 'not_found', dispatch: 'not_found' } },
+  } }, {
+    statuses: [503],
+    codes: ['UPSTREAM_UNAVAILABLE'],
+    sources: { payment: 'unavailable', dispatch: 'not_found' },
+  }), /payment source/);
+  assert.throws(() => assertSummary({ ...unavailable, status: 200, json: {
+    orderId: '11111111-1111-4111-8111-111111111111',
+    partial: true,
+    payment: { availability: 'available', data: { status: 'CHARGED' } },
+    dispatch: { availability: 'unavailable' },
+  } }, {
+    statuses: [200],
+    partial: true,
+    forbidPaymentStatus: 'CHARGED',
+  }), /CHARGED/);
+  assert.doesNotThrow(() => assertSummary({
+    status: 404,
+    text: '{"code":"SUMMARY_NOT_FOUND"}',
+    json: { code: 'SUMMARY_NOT_FOUND', message: 'No summary sources found for this order', traceId: '33333333-3333-4333-8333-333333333333' },
+  }, {
+    statuses: [404],
+    codes: ['SUMMARY_NOT_FOUND'],
+    forbidPaymentStatus: 'CHARGED',
+  }));
+});
+
+test('assertStockSummary accepts 503/404 and rejects other statuses or codes', () => {
+  assert.doesNotThrow(() => assertStockSummary({
+    status: 503,
+    text: '{"code":"UPSTREAM_UNAVAILABLE"}',
+    json: {
+      code: 'UPSTREAM_UNAVAILABLE',
+      message: 'One or more summary sources are unavailable',
+      traceId: '22222222-2222-4222-8222-222222222222',
+      details: { sources: { payment: 'unavailable', dispatch: 'not_found' } },
+    },
+  }, 'stock summary'));
+  assert.doesNotThrow(() => assertStockSummary({
+    status: 404,
+    text: '{"code":"SUMMARY_NOT_FOUND"}',
+    json: { code: 'SUMMARY_NOT_FOUND', message: 'No summary sources found for this order', traceId: '33333333-3333-4333-8333-333333333333' },
+  }, 'stock summary'));
+  assert.throws(() => assertStockSummary({
+    status: 200,
+    text: '{"partial":true}',
+    json: { orderId: '11111111-1111-4111-8111-111111111111', partial: true },
+  }, 'stock summary'), /expected 503 or 404/);
+  assert.throws(() => assertStockSummary({
+    status: 503,
+    text: '{"code":"SUMMARY_NOT_FOUND"}',
+    json: {
+      code: 'SUMMARY_NOT_FOUND',
+      message: 'No summary sources found for this order',
+      traceId: '33333333-3333-4333-8333-333333333333',
+      details: { sources: { payment: 'unavailable', dispatch: 'not_found' } },
+    },
+  }, 'stock summary'), /expected code/);
 });

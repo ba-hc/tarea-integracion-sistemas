@@ -5,7 +5,9 @@
 # upstream documents !reset from 2.24.0; the minimum version was not verified here.
 #
 # Only api-gateway publishes a host port. Sales, Inventory, BFF and Dispatch stay
-# internal. The root docker-compose.yml remains the T1 baseline and is not edited.
+# internal. P4_GATEWAY_PUBLISHED_PORT selects that loopback host port (default
+# 8080); the isolated runner uses 8081. The root docker-compose.yml remains the
+# T1 baseline and is not edited.
 # Pagos is not a service here: BFF_PAYMENTS_BASE_URL is a provisional address.
 
 services:
@@ -43,7 +45,7 @@ services:
       GATEWAY_MAX_REQUEST_BODY_BYTES: "${GATEWAY_MAX_REQUEST_BODY_BYTES:-1048576}"
       GATEWAY_MAX_RESPONSE_BODY_BYTES: "${GATEWAY_MAX_RESPONSE_BODY_BYTES:-2097152}"
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${P4_GATEWAY_PUBLISHED_PORT:-8080}:8080"
     depends_on:
       sales-api:
         condition: service_started

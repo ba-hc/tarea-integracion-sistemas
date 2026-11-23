@@ -2,17 +2,23 @@
 // P4 system smoke. Run from the repository root:
 //   node tests/t2/p4-smoke.mjs
 // Optional: GATEWAY_BASE_URL, GATEWAY_READER_TOKEN, GATEWAY_OPERATOR_TOKEN,
+//           P4_SMOKE_EXPECT_STEPS=stock|stock,dispatch,
 //           P4_SMOKE_DISPATCH_FIXTURE=true.
-// Tokens are never printed. The script cancels its test orders/dispatch in finally.
+// The smoke reads SAGA_STEPS from the real sales-api container before any
+// mutation. It supports only stock and stock,dispatch; a Saga with payment is
+// rejected until Pagos (P2) exists. Compose exec respects COMPOSE_PROJECT_NAME
+// and COMPOSE_ENV_FILES. Tokens are never printed. The script cancels its test
+// orders/dispatch in finally.
 
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-const BASE = (process.env.GATEWAY_BASE_URL ?? 'http://127.0.0.1:8080').replace(/\/+$/, '');
+export const PART_ID = 'e58e2904-9db7-4c8d-8f36-7107e863a268';
+export const DEFAULT_GATEWAY_BASE_URL = 'http://127.0.0.1:8080';
+export const SUPPORTED_SAGA_MODES = Object.freeze(['stock', 'stock,dispatch']);
 const COMPOSE = ['compose', '-f', 'docker-compose.yml', '-f', 'docker-compose.p4.yml'];
-const PART_ID = 'e58e2904-9db7-4c8d-8f36-7107e863a268';
 const HTTP_TIMEOUT_MS = 5_000;
 const CLI_TIMEOUT_MS = 20_000;
 const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 60;
@@ -21,34 +27,34 @@ const MAX_RATE_LIMIT_REQUESTS = 1_000;
 const MAX_RATE_LIMIT_ROUNDS = 2;
 const MAX_RATE_LIMIT_TOTAL_REQUESTS = MAX_RATE_LIMIT_ROUNDS * (MAX_RATE_LIMIT_REQUESTS + 1);
 
-let operatorToken = process.env.GATEWAY_OPERATOR_TOKEN?.trim() || undefined;
-let readerToken = process.env.GATEWAY_READER_TOKEN?.trim() || undefined;
+let operatorToken;
+let readerToken;
 let createdOrderId;
 let summaryOrderId;
 let dispatchOrderId;
 
-function assert(condition, message) {
+export function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function expectStatus(response, expected, step) {
+export function expectStatus(response, expected, step) {
   if (response.status !== expected) {
     throw new Error(`${step}: expected HTTP ${expected}, got ${response.status}`);
   }
 }
 
-function codeOf(response) {
+export function codeOf(response) {
   return response.json !== null && typeof response.json === 'object'
     ? response.json.code
     : undefined;
 }
 
-function expectCode(response, expected, step) {
+export function expectCode(response, expected, step) {
   const code = codeOf(response);
   if (code !== expected) throw new Error(`${step}: expected code ${expected}, got ${code ?? 'none'}`);
 }
 
-function assertUuid(value, step) {
+export function assertUuid(value, step) {
   assert(
     typeof value === 'string'
       && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value),
@@ -56,12 +62,81 @@ function assertUuid(value, step) {
   );
 }
 
-function runDocker(args, timeoutMs = CLI_TIMEOUT_MS) {
-  const result = spawnSync('docker', [...COMPOSE, ...args], {
+export function parseSagaSteps(raw) {
+  if (typeof raw !== 'string') throw new Error('SAGA_STEPS is missing in sales-api');
+  const parts = raw.split(',').map((part) => part.trim());
+  if (parts.length === 0 || parts.some((part) => part === '')) {
+    throw new Error('SAGA_STEPS contains an empty step');
+  }
+  if (new Set(parts).size !== parts.length) {
+    throw new Error('SAGA_STEPS contains duplicate steps');
+  }
+  return parts.join(',');
+}
+
+export function resolveSmokeMode({ actual, expected } = {}) {
+  const actualSteps = parseSagaSteps(actual);
+  if (actualSteps.split(',').includes('payment')) {
+    throw new Error('Saga con Pagos pendiente de integración P2; el smoke P4 no admite SAGA_STEPS con payment');
+  }
+  if (!SUPPORTED_SAGA_MODES.includes(actualSteps)) {
+    throw new Error(`SAGA_STEPS no soportado en esta fase: ${actualSteps}`);
+  }
+
+  if (expected !== undefined && expected !== null && String(expected).trim() !== '') {
+    const rawExpected = String(expected).trim();
+    const expectedSteps = rawExpected === 'full' ? 'stock,payment,dispatch' : parseSagaSteps(rawExpected);
+    if (expectedSteps.split(',').includes('payment')) {
+      throw new Error('Saga con Pagos pendiente de integración P2; P4_SMOKE_EXPECT_STEPS no puede pedir full');
+    }
+    if (!SUPPORTED_SAGA_MODES.includes(expectedSteps)) {
+      throw new Error(`P4_SMOKE_EXPECT_STEPS no soportado en esta fase: ${expectedSteps}`);
+    }
+    if (expectedSteps !== actualSteps) {
+      throw new Error(
+        `P4_SMOKE_EXPECT_STEPS=${expectedSteps} no coincide con SAGA_STEPS real=${actualSteps}`,
+      );
+    }
+  }
+
+  return actualSteps;
+}
+
+export function assertLoopbackBaseUrl(raw) {
+  let url;
+  try {
+    url = new URL(String(raw));
+  } catch {
+    throw new Error('GATEWAY_BASE_URL must be an absolute http URL');
+  }
+  if (url.protocol !== 'http:') throw new Error('GATEWAY_BASE_URL must use http for the local stack');
+  if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') {
+    throw new Error('GATEWAY_BASE_URL must point to 127.0.0.1 or localhost');
+  }
+  if (url.username !== '' || url.password !== '') {
+    throw new Error('GATEWAY_BASE_URL must not include credentials');
+  }
+  if (url.port === '') throw new Error('GATEWAY_BASE_URL must include an explicit port');
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+    throw new Error('GATEWAY_BASE_URL must not include a path, query or fragment');
+  }
+  return url.origin;
+}
+
+export function composeEnvironment(env = process.env) {
+  return { ...env };
+}
+
+export function runDocker(args, timeoutMs = CLI_TIMEOUT_MS, {
+  spawn = spawnSync,
+  env = composeEnvironment(),
+} = {}) {
+  const result = spawn('docker', [...COMPOSE, ...args], {
     encoding: 'utf8',
     timeout: timeoutMs,
     shell: false,
     maxBuffer: 1024 * 1024,
+    env,
   });
   if (result.error !== undefined) {
     throw new Error(`docker command failed: ${result.error.name}`);
@@ -69,28 +144,14 @@ function runDocker(args, timeoutMs = CLI_TIMEOUT_MS) {
   return result;
 }
 
-function tokenFromCli(role, subject) {
-  const result = runDocker([
-    'exec',
-    '-T',
-    'api-gateway',
-    'node',
-    'dist/src/cli/token.js',
-    '--sub',
-    subject,
-    '--role',
-    role,
-  ]);
-  if (result.status !== 0) {
-    throw new Error(`token CLI failed for ${role}; rebuild the P4 images with the overlay`);
-  }
-  const token = result.stdout.trim();
-  assert(token.split('.').length === 3, `token CLI for ${role} returned an invalid token`);
-  return token;
-}
-
-function readContainerEnv(service, name) {
-  const result = runDocker([
+export function readContainerEnv(service, name, {
+  run = runDocker,
+  timeoutMs = 10_000,
+  allowEmpty = false,
+} = {}) {
+  if (!/^[a-z0-9-]+$/.test(service)) throw new Error('invalid container service name');
+  if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error('invalid container environment name');
+  const result = run([
     'exec',
     '-T',
     service,
@@ -98,32 +159,187 @@ function readContainerEnv(service, name) {
     '--input-type=module',
     '-e',
     `process.stdout.write(process.env.${name} ?? '')`,
-  ], 10_000);
-  return result.status === 0 ? result.stdout.trim() : '';
+  ], timeoutMs);
+  if (result.error !== undefined) {
+    throw new Error(`cannot read ${name} from ${service}: ${result.error.name}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`cannot read ${name} from ${service}: docker exec exit ${result.status ?? 'unknown'}`);
+  }
+  const value = (result.stdout ?? '').trim();
+  if (!allowEmpty && value === '') throw new Error(`${name} is empty in ${service}`);
+  return value;
 }
 
-async function http(path, options = {}) {
-  const headers = { ...(options.headers ?? {}) };
-  if (options.token !== undefined) headers.Authorization = `Bearer ${options.token}`;
-  const init = {
-    method: options.method ?? 'GET',
-    headers,
-    redirect: 'manual',
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+export function tokenFromCli(role, subject, {
+  run = runDocker,
+  timeoutMs = CLI_TIMEOUT_MS,
+  service = 'api-gateway',
+} = {}) {
+  if (role !== 'reader' && role !== 'operator') throw new Error(`invalid role: ${role}`);
+  assert(typeof subject === 'string' && subject.length > 0, 'token subject is required');
+  const result = run([
+    'exec',
+    '-T',
+    service,
+    'node',
+    'dist/src/cli/token.js',
+    '--sub',
+    subject,
+    '--role',
+    role,
+  ], timeoutMs);
+  if (result.error !== undefined) {
+    throw new Error(`token CLI failed for ${role}: ${result.error.name}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`token CLI failed for ${role}; rebuild the P4 images with the overlay`);
+  }
+  const token = (result.stdout ?? '').trim();
+  assert(token.split('.').length === 3, `token CLI for ${role} returned an invalid token`);
+  return token;
+}
+
+export function createHttpClient(rawBaseUrl, {
+  timeoutMs = HTTP_TIMEOUT_MS,
+  fetchImpl = fetch,
+} = {}) {
+  const base = assertLoopbackBaseUrl(rawBaseUrl);
+  return async function request(path, options = {}) {
+    assert(typeof path === 'string' && path.startsWith('/'), 'http path must start with /');
+    const headers = { ...(options.headers ?? {}) };
+    if (options.token !== undefined) headers.Authorization = `Bearer ${options.token}`;
+    const init = {
+      method: options.method ?? 'GET',
+      headers,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs),
+    };
+    if (options.body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(options.body);
+    }
+    const response = await fetchImpl(`${base}${path}`, init);
+    const text = await response.text();
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = undefined;
+    }
+    return { status: response.status, headers: response.headers, text, json };
   };
-  if (options.body !== undefined) {
-    headers['Content-Type'] = 'application/json';
-    init.body = JSON.stringify(options.body);
+}
+
+export let http = createHttpClient(DEFAULT_GATEWAY_BASE_URL);
+
+export function setBaseUrl(raw) {
+  http = createHttpClient(raw);
+  return http;
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function sameItems(actual, expected) {
+  if (!Array.isArray(actual) || !Array.isArray(expected) || actual.length !== expected.length) {
+    return false;
   }
-  const response = await fetch(`${BASE}${path}`, init);
-  const text = await response.text();
-  let json;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = undefined;
+  const normalize = (items) => items
+    .map((item) => ({
+      partId: typeof item?.partId === 'string' ? item.partId.toLowerCase() : item?.partId,
+      quantity: item?.quantity,
+    }))
+    .sort((left, right) => String(left.partId).localeCompare(String(right.partId)));
+  return JSON.stringify(normalize(actual)) === JSON.stringify(normalize(expected));
+}
+
+export function assertSummary(response, expected, step = 'summary') {
+  assert(isRecord(response), `${step}: response missing`);
+  assert(
+    Array.isArray(expected.statuses) && expected.statuses.includes(response.status),
+    `${step}: expected HTTP ${expected.statuses.join(' or ')}, got ${response.status}`,
+  );
+  const body = response.json;
+  assert(isRecord(body), `${step}: response body is not an object`);
+
+  if (expected.codes === undefined) {
+    assert(body.code === undefined, `${step}: unexpected error code ${String(body.code)}`);
+  } else {
+    assert(
+      expected.codes.includes(body.code),
+      `${step}: expected code ${expected.codes.join(' or ')}, got ${body.code ?? 'none'}`,
+    );
   }
-  return { status: response.status, headers: response.headers, text, json };
+
+  if (expected.partial !== undefined) {
+    assert(body.partial === expected.partial, `${step}: expected partial ${expected.partial}`);
+  }
+  if (expected.orderId !== undefined) {
+    assert(body.orderId === expected.orderId, `${step}: summary orderId changed`);
+  }
+
+  if (expected.paymentAvailability !== undefined) {
+    assert(
+      body.payment?.availability === expected.paymentAvailability,
+      `${step}: expected payment ${expected.paymentAvailability}, got ${body.payment?.availability ?? 'none'}`,
+    );
+    if (expected.paymentAvailability === 'available') {
+      assert(isRecord(body.payment.data), `${step}: available payment without data`);
+      if (expected.paymentStatus !== undefined) {
+        assert(body.payment.data.status === expected.paymentStatus, `${step}: payment status changed`);
+      }
+    } else {
+      assert(body.payment?.data === undefined, `${step}: unavailable payment exposed data`);
+    }
+  }
+
+  if (expected.dispatchAvailability !== undefined) {
+    assert(
+      body.dispatch?.availability === expected.dispatchAvailability,
+      `${step}: expected dispatch ${expected.dispatchAvailability}, got ${body.dispatch?.availability ?? 'none'}`,
+    );
+    if (expected.dispatchAvailability === 'available') {
+      assert(isRecord(body.dispatch.data), `${step}: available dispatch without data`);
+      if (expected.orderId !== undefined) {
+        assert(body.dispatch.data.orderId === expected.orderId, `${step}: dispatch orderId changed`);
+      }
+      if (expected.dispatchStatus !== undefined) {
+        assert(body.dispatch.data.status === expected.dispatchStatus, `${step}: dispatch status changed`);
+      }
+      if (expected.items !== undefined) {
+        assert(sameItems(body.dispatch.data.items, expected.items), `${step}: dispatch items changed`);
+      }
+    } else {
+      assert(body.dispatch?.data === undefined, `${step}: unavailable dispatch exposed data`);
+    }
+  }
+
+  if (expected.sources !== undefined) {
+    assert(isRecord(body.details) && isRecord(body.details.sources), `${step}: missing details.sources`);
+    assert(
+      body.details.sources.payment === expected.sources.payment,
+      `${step}: unexpected payment source ${body.details.sources.payment}`,
+    );
+    assert(
+      body.details.sources.dispatch === expected.sources.dispatch,
+      `${step}: unexpected dispatch source ${body.details.sources.dispatch}`,
+    );
+  }
+
+  if (expected.forbidPaymentStatus !== undefined) {
+    assert(
+      body.payment?.data?.status !== expected.forbidPaymentStatus,
+      `${step}: payment ${expected.forbidPaymentStatus} must not appear without Pagos`,
+    );
+    assert(
+      !String(response.text ?? '').includes(expected.forbidPaymentStatus),
+      `${step}: response exposed ${expected.forbidPaymentStatus}`,
+    );
+  }
+
+  return body;
 }
 
 async function waitForStatus(path, expected, step, attempts = 30) {
@@ -326,7 +542,7 @@ export async function cleanupArtifacts({
   if (dispatchId !== undefined) {
     attempted = true;
     try {
-      const result = cancelDispatchFn({ orderId: dispatchId });
+      const result = await cancelDispatchFn({ orderId: dispatchId });
       if (!result.ok) pending = true;
     } catch {
       pending = true;
@@ -345,8 +561,75 @@ async function cleanupAll() {
   });
 }
 
+async function createOrder({
+  body,
+  key,
+  step,
+  onId,
+}) {
+  let response;
+  try {
+    response = await http('/v1/orders', {
+      method: 'POST',
+      token: operatorToken,
+      headers: { 'Idempotency-Key': key },
+      body,
+    });
+  } catch {
+    console.error(`[recovery] Idempotency-Key=${key}`);
+    throw new Error(`${step}: create order ambiguous; recovery pending by Idempotency-Key`);
+  }
+  const id = typeof response.json?.id === 'string' ? response.json.id : undefined;
+  if (id !== undefined) onId(id);
+  if (response.status >= 500 && id === undefined) {
+    console.error(`[recovery] Idempotency-Key=${key}`);
+    throw new Error(`${step}: create order ambiguous (5xx without ID); recovery pending by Idempotency-Key`);
+  }
+  return response;
+}
+
+export function assertStockSummary(response, step) {
+  if (response.status === 503) {
+    assertSummary(response, {
+      statuses: [503],
+      codes: ['UPSTREAM_UNAVAILABLE'],
+      sources: { payment: 'unavailable', dispatch: 'not_found' },
+      forbidPaymentStatus: 'CHARGED',
+    }, step);
+    return;
+  }
+  if (response.status === 404) {
+    assertSummary(response, {
+      statuses: [404],
+      codes: ['SUMMARY_NOT_FOUND'],
+      forbidPaymentStatus: 'CHARGED',
+    }, step);
+    return;
+  }
+  throw new Error(`${step}: expected 503 or 404, got ${response.status}`);
+}
+
 export async function main() {
+  assert(existsSync('docker-compose.yml'), 'run this script from the repository root');
   assert(existsSync('docker-compose.p4.yml'), 'run this script from the repository root');
+  operatorToken = process.env.GATEWAY_OPERATOR_TOKEN?.trim() || undefined;
+  readerToken = process.env.GATEWAY_READER_TOKEN?.trim() || undefined;
+  createdOrderId = undefined;
+  summaryOrderId = undefined;
+  dispatchOrderId = undefined;
+  setBaseUrl(process.env.GATEWAY_BASE_URL ?? DEFAULT_GATEWAY_BASE_URL);
+
+  const actualSteps = readContainerEnv('sales-api', 'SAGA_STEPS');
+  const mode = resolveSmokeMode({
+    actual: actualSteps,
+    expected: process.env.P4_SMOKE_EXPECT_STEPS,
+  });
+  console.log(`[ok] SAGA_STEPS real=${mode} (detected before mutations)`);
+  if (mode === 'stock') {
+    console.log('[info] modo stock: sin Pagos ni Despacho; el resumen debe quedar sin fuentes');
+  } else {
+    console.log('[info] modo stock,dispatch: Saga de dos pasos; Pagos P2 no integrado, no se prueba cobro');
+  }
 
   const health = await waitForStatus('/health', 200, 'gateway health');
   expectStatus(health, 200, 'gateway health');
@@ -402,21 +685,12 @@ export async function main() {
 
   const orderBody = { customerId, items: [{ partId: PART_ID, quantity: 1 }] };
   const idempotencyKey = `p4-smoke-order-${randomUUID()}`;
-  let order;
-  try {
-    order = await http('/v1/orders', {
-      method: 'POST',
-      token: operatorToken,
-      headers: { 'Idempotency-Key': idempotencyKey },
-      body: orderBody,
-    });
-  } catch {
-    throw new Error('create order ambiguous; recovery pending by Idempotency-Key');
-  }
-  if (typeof order.json?.id === 'string') createdOrderId = order.json.id;
-  if (order.status >= 500 && createdOrderId === undefined) {
-    throw new Error('create order ambiguous (5xx without ID); recovery pending by Idempotency-Key');
-  }
+  const order = await createOrder({
+    body: orderBody,
+    key: idempotencyKey,
+    step: 'create order',
+    onId: (id) => { createdOrderId = id; },
+  });
   expectStatus(order, 201, 'create order');
   assert(order.json?.status === 'CONFIRMED', 'create order: expected CONFIRMED');
   assertUuid(createdOrderId, 'create order');
@@ -434,8 +708,9 @@ export async function main() {
     (replay.headers.get('idempotency-replayed') ?? '').toLowerCase() === 'true',
     'order replay: Idempotency-Replayed true absent',
   );
+  assert(replay.json?.id === createdOrderId, 'order replay: orderId changed');
   assert(JSON.stringify(replay.json) === firstOrderBody, 'order replay: body changed');
-  console.log('[ok] idempotent replay 201 with same body and Idempotency-Replayed');
+  console.log('[ok] idempotent replay 201 with same orderId, body and Idempotency-Replayed');
 
   const changed = await http('/v1/orders', {
     method: 'POST',
@@ -447,62 +722,104 @@ export async function main() {
   expectCode(changed, 'IDEMPOTENCY_KEY_CONFLICT', 'idempotency conflict');
   console.log('[ok] changed payload with same key -> 409 IDEMPOTENCY_KEY_CONFLICT');
 
-  const cancelFirst = await http(`/v1/orders/${createdOrderId}/cancel`, {
-    method: 'POST',
-    token: operatorToken,
-  });
-  expectStatus(cancelFirst, 200, 'first cancel');
-  assert(cancelFirst.json?.status === 'CANCELLED', 'first cancel: expected CANCELLED');
+  if (mode === 'stock,dispatch') {
+    const summary = await http(`/web/v1/orders/${createdOrderId}/summary`, { token: readerToken });
+    assertSummary(summary, {
+      statuses: [200],
+      partial: true,
+      paymentAvailability: 'unavailable',
+      dispatchAvailability: 'available',
+      dispatchStatus: 'CREATED',
+      orderId: createdOrderId,
+      items: orderBody.items,
+      forbidPaymentStatus: 'CHARGED',
+    }, 'dispatch summary');
 
-  const cancelSecond = await http(`/v1/orders/${createdOrderId}/cancel`, {
-    method: 'POST',
-    token: operatorToken,
-  });
-  expectStatus(cancelSecond, 200, 'second cancel');
-  assert(cancelSecond.json?.status === 'CANCELLED', 'second cancel: expected CANCELLED');
-  createdOrderId = undefined;
-  console.log('[ok] cancel twice -> 200 CANCELLED');
+    const summaryAgain = await http(`/web/v1/orders/${createdOrderId}/summary`, { token: readerToken });
+    assertSummary(summaryAgain, {
+      statuses: [200],
+      partial: true,
+      paymentAvailability: 'unavailable',
+      dispatchAvailability: 'available',
+      dispatchStatus: 'CREATED',
+      orderId: createdOrderId,
+      items: orderBody.items,
+      forbidPaymentStatus: 'CHARGED',
+    }, 'dispatch summary query');
+    assert(
+      JSON.stringify(summaryAgain.json) === JSON.stringify(summary.json),
+      'dispatch summary: repeated query changed',
+    );
 
-  let summaryOrder;
-  try {
-    summaryOrder = await http('/v1/orders', {
+    const salesBeforeCancel = await http(`/v1/orders/${createdOrderId}`, { token: readerToken });
+    expectStatus(salesBeforeCancel, 200, 'sales order before cancel');
+    assert(salesBeforeCancel.json?.status === 'CONFIRMED', 'sales order before cancel: expected CONFIRMED');
+    console.log('[ok] dispatch summary 200 partial:true CREATED, same orderId/items, stable query');
+
+    const cancelFirst = await http(`/v1/orders/${createdOrderId}/cancel`, {
       method: 'POST',
       token: operatorToken,
-      headers: { 'Idempotency-Key': `p4-smoke-summary-${randomUUID()}` },
-      body: { customerId, items: [{ partId: PART_ID, quantity: 1 }] },
     });
-  } catch {
-    throw new Error('summary order ambiguous; recovery pending by Idempotency-Key');
-  }
-  if (typeof summaryOrder.json?.id === 'string') summaryOrderId = summaryOrder.json.id;
-  if (summaryOrder.status >= 500 && summaryOrderId === undefined) {
-    throw new Error('summary order ambiguous (5xx without ID); recovery pending by Idempotency-Key');
-  }
-  expectStatus(summaryOrder, 201, 'summary order');
-  assertUuid(summaryOrderId, 'summary order');
-  assert(summaryOrder.json?.status === 'CONFIRMED', 'summary order: expected CONFIRMED');
+    expectStatus(cancelFirst, 200, 'first cancel');
+    assert(cancelFirst.json?.status === 'CANCELLED', 'first cancel: expected CANCELLED');
 
-  const summary = await http(`/web/v1/orders/${summaryOrderId}/summary`, { token: readerToken });
-  assert(
-    summary.status === 503 || summary.status === 404,
-    `summary without Pagos/Dispatch: expected 503 or 404, got ${summary.status}`,
-  );
-  assert(
-    codeOf(summary) === 'UPSTREAM_UNAVAILABLE' || codeOf(summary) === 'SUMMARY_NOT_FOUND',
-    'summary without Pagos/Dispatch: unexpected error code',
-  );
-  if (summary.status === 503) {
-    assert(
-      summary.json?.details?.sources !== undefined,
-      'summary 503 did not come from the BFF (missing details.sources)',
-    );
+    const cancelSecond = await http(`/v1/orders/${createdOrderId}/cancel`, {
+      method: 'POST',
+      token: operatorToken,
+    });
+    expectStatus(cancelSecond, 200, 'second cancel');
+    assert(cancelSecond.json?.status === 'CANCELLED', 'second cancel: expected CANCELLED');
+
+    const cancelledSummary = await http(`/web/v1/orders/${createdOrderId}/summary`, { token: readerToken });
+    assertSummary(cancelledSummary, {
+      statuses: [200],
+      partial: true,
+      paymentAvailability: 'unavailable',
+      dispatchAvailability: 'available',
+      dispatchStatus: 'CANCELLED',
+      orderId: createdOrderId,
+      items: orderBody.items,
+      forbidPaymentStatus: 'CHARGED',
+    }, 'cancelled dispatch summary');
+
+    const salesCancelled = await http(`/v1/orders/${createdOrderId}`, { token: readerToken });
+    expectStatus(salesCancelled, 200, 'sales order after cancel');
+    assert(salesCancelled.json?.status === 'CANCELLED', 'sales order after cancel: expected CANCELLED');
+    console.log('[ok] cancel twice -> Sales CANCELLED and dispatch CANCELLED in summary');
+  } else {
+    const cancelFirst = await http(`/v1/orders/${createdOrderId}/cancel`, {
+      method: 'POST',
+      token: operatorToken,
+    });
+    expectStatus(cancelFirst, 200, 'first cancel');
+    assert(cancelFirst.json?.status === 'CANCELLED', 'first cancel: expected CANCELLED');
+
+    const cancelSecond = await http(`/v1/orders/${createdOrderId}/cancel`, {
+      method: 'POST',
+      token: operatorToken,
+    });
+    expectStatus(cancelSecond, 200, 'second cancel');
+    assert(cancelSecond.json?.status === 'CANCELLED', 'second cancel: expected CANCELLED');
+    console.log('[ok] cancel twice -> 200 CANCELLED');
+
+    const summaryOrder = await createOrder({
+      body: { customerId, items: [{ partId: PART_ID, quantity: 1 }] },
+      key: `p4-smoke-summary-${randomUUID()}`,
+      step: 'summary order',
+      onId: (id) => { summaryOrderId = id; },
+    });
+    expectStatus(summaryOrder, 201, 'summary order');
+    assertUuid(summaryOrderId, 'summary order');
+    assert(summaryOrder.json?.status === 'CONFIRMED', 'summary order: expected CONFIRMED');
+
+    const summary = await http(`/web/v1/orders/${summaryOrderId}/summary`, { token: readerToken });
+    assertStockSummary(summary, 'summary stock');
+    console.log(`[ok] summary stock -> ${summary.status} ${codeOf(summary)} without CHARGED`);
   }
-  assert(!summary.text.includes('CHARGED'), 'summary without Pagos/Dispatch exposed CHARGED');
-  console.log(`[ok] summary without Pagos/Dispatch -> ${summary.status} ${codeOf(summary)} without CHARGED`);
 
   const rateConfig = resolveRateLimitConfig(
-    readContainerEnv('api-gateway', 'GATEWAY_RATE_LIMIT_MAX_REQUESTS'),
-    readContainerEnv('api-gateway', 'GATEWAY_RATE_LIMIT_WINDOW_MS'),
+    readContainerEnv('api-gateway', 'GATEWAY_RATE_LIMIT_MAX_REQUESTS', { allowEmpty: true }),
+    readContainerEnv('api-gateway', 'GATEWAY_RATE_LIMIT_WINDOW_MS', { allowEmpty: true }),
   );
   if (rateConfig.skipReason !== undefined) {
     console.log(`[skip] rate limit: ${rateConfig.skipReason}`);
@@ -526,6 +843,8 @@ export async function main() {
 
   if (process.env.P4_SMOKE_DISPATCH_FIXTURE !== 'true') {
     console.log('[skip] dispatch fixture: set P4_SMOKE_DISPATCH_FIXTURE=true to create one isolated dispatch');
+  } else if (mode !== 'stock') {
+    console.log('[skip] dispatch fixture: only used in stock mode; stock,dispatch creates a real dispatch');
   } else if (readContainerEnv('dispatch-api', 'DISPATCH_FAIL_CREATE') === 'true') {
     console.log('[skip] dispatch fixture: DISPATCH_FAIL_CREATE=true is already active');
   } else {
@@ -546,21 +865,16 @@ export async function main() {
     const fixtureSummary = await http(`/web/v1/orders/${dispatchOrderId}/summary`, {
       token: readerToken,
     });
-    expectStatus(fixtureSummary, 200, 'dispatch fixture summary');
-    assert(fixtureSummary.json?.partial === true, 'dispatch fixture summary: expected partial true');
-    assert(
-      fixtureSummary.json?.payment?.availability === 'unavailable',
-      'dispatch fixture summary: expected payment unavailable',
-    );
-    assert(
-      fixtureSummary.json?.dispatch?.availability === 'available',
-      'dispatch fixture summary: expected dispatch available',
-    );
-    assert(
-      fixtureSummary.json?.dispatch?.data?.status === 'CREATED',
-      'dispatch fixture summary: expected dispatch CREATED',
-    );
-    assert(!fixtureSummary.text.includes('CHARGED'), 'dispatch fixture summary exposed CHARGED');
+    assertSummary(fixtureSummary, {
+      statuses: [200],
+      partial: true,
+      paymentAvailability: 'unavailable',
+      dispatchAvailability: 'available',
+      dispatchStatus: 'CREATED',
+      orderId: dispatchOrderId,
+      items: [{ partId: PART_ID, quantity: 1 }],
+      forbidPaymentStatus: 'CHARGED',
+    }, 'dispatch fixture summary');
     console.log('[ok] isolated dispatch fixture summary 200 partial (not Saga evidence)');
   }
 
