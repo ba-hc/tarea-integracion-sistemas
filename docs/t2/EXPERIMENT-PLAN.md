@@ -1,8 +1,19 @@
-# T2-402/403 — plan de experimento (preparación, sin resultados)
+# T2-402/403 — plan de experimento
 
-Este documento prepara el experimento de protecciones de P2 y compensación de P3. No contiene
-resultados, métricas observadas ni conclusiones. No se ejecutaron escenarios de falla porque los
-contratos y módulos de P2/P3 todavía no están integrados. No se editan sus módulos desde P4.
+**Estado:** smoke parcial ejecutado; E1–E3 no ejecutados. P3 existe en Sales y publica el control
+`DISPATCH_FAIL_CREATE=true`. Pagos P2 no existe, así que no hay Circuit Breaker, Bulkhead ni toggles
+P2. La evidencia del smoke parcial está en [VERIFICATION.md](VERIFICATION.md), §9; no es evidencia
+de E1–E3.
+
+## Lo ya ejecutado: smoke parcial
+
+La corrida real del runner cubrió `stock`, `stock,dispatch` y `DISPATCH_FAIL_CREATE=true` sin Pagos.
+Dejó `GetPart` `5 → 5` en los dos primeros modos y `5 → 5 → 5` antes/tras el primer 503/tras el
+replay en el tercero. El fallo de Despacho devolvió `503 DISPATCH_UNAVAILABLE`, replay con el mismo
+código/mensaje, cero órdenes públicas y `GET /v1/customers` `200`. No usó fixture sintética.
+
+Ese smoke no mide latencia, tasas, Circuit Breaker, Bulkhead, reembolso ni la Saga de tres pasos. No
+se presentan sus resultados como E1–E3.
 
 ## Hipótesis y controles
 
@@ -13,25 +24,49 @@ contratos y módulos de P2/P3 todavía no están integrados. No se editan sus m�
 - **H3 — pico de Pagos:** una fuente Pagos lenta o caída debe activar las protecciones acordadas
   en P2 sin que el rate limit del Gateway oculte el Circuit Breaker o el Bulkhead.
 
-Los contratos, endpoints, códigos y toggles definitivos de P2/P3 están pendientes. No se inventan
-aquí. El plan usa los contratos internos actuales sólo como referencia:
-[T2-INTERNAL-CONTRACTS.md](../architecture/T2-INTERNAL-CONTRACTS.md) y
-[P4-SPEC.md](P4-SPEC.md).
+P3 ya publica `DISPATCH_FAIL_CREATE=true`; no se inventan toggles de P2. E2 no compara un brazo “sin
+compensación”: no se desactivan invariantes de la Saga. La comparación con y sin protecciones se
+limita a E1/E3, en un entorno P2 aislado y coordinado.
 
 ## Escenarios
 
 | ID | Escenario | Brazo A | Brazo B | Qué debe observarse |
 |---|---|---|---|---|
 | E1 | Éxito completo | Flujo normal | Flujo normal con protecciones P2 | Estado final confirmado y mismos efectos de negocio. |
-| E2 | Falla en el último paso (Despacho) | Camino normal, sin falla | Falla de Despacho con compensación activa P3 | El stock y los pasos previos quedan en el estado acordado; no se duplican efectos. |
+| E2 | Falla en el último paso (Despacho) | Camino normal, sin falla | `DISPATCH_FAIL_CREATE=true` con compensación P3 activa | El stock y los pasos previos quedan en el estado acordado; no se duplican efectos. |
 | E3 | Pagos lento o caído en pico | Sin protección | Circuit Breaker/Bulkhead P2 en entorno aislado y coordinado | Latencia acotada, rechazos explícitos, continuidad de lecturas y recuperación. |
 
-E2 no compara un brazo “sin compensación”: no se desactivan invariantes de la Saga ni se añade
-código P3 desde P4. La comparación con y sin protecciones se limita a E3, en un entorno P2
-aislado y coordinado. No se mutan módulos de la Saga ni volúmenes compartidos desde P4.
+E1–E3 requieren Pagos P2 real y coordinación entre P2/P3/P4. No se ejecutan desde P4. E2 usa el
+control publicado por P3, pero el flujo completo con cobro sigue dependiendo de P2. No se mutan
+módulos de la Saga ni volúmenes compartidos desde P4.
 
-E2 y E3 no se ejecutan antes de que P2/P3 publiquen contratos y módulos. El smoke P4 no es
-evidencia de E1–E3.
+## Entradas que debe entregar P2
+
+Antes de ejecutar E1–E3, P2 debe acordar y entregar:
+
+- Contrato interno, URL, health y versión desplegable de Pagos.
+- Controles de falla y comparación disponibles: rechazo, timeout, lentitud, caída y recuperación,
+  con el nombre exacto de cada control.
+- Métricas y atribución de Circuit Breaker/Bulkhead, estados y ventanas de medición.
+- Comportamiento de recuperación y criterio para distinguir rechazo confirmado de resultado en duda.
+- Presupuesto de timeouts de Pagos y su relación con el deadline de Sales y el rate limit del
+  Gateway.
+
+Si P2 no entrega un control o una señal, el brazo correspondiente no se ejecuta. No se sustituye por
+un toggle inventado ni por un mock runtime.
+
+## Protocolo práctico
+
+- Preflight de stock y de los controles de falla antes de cada serie.
+- Misma tasa, concurrencia, datos y semilla entre brazos; registrar duración y warmup.
+- Al menos tres iteraciones por brazo, sin mezclar E1, E2 y E3 en la misma serie.
+- Medir rutas por separado: creación/cancelación, resumen, Pagos y lecturas de clientes.
+- Reportar p50, p95, p99, `n` y tasa de error por ruta y brazo.
+- Leer `GET /v1/customers` mientras falla Pagos/Despacho para comprobar continuidad.
+- Distinguir un `429` del rate limit del Gateway de un fallback o rechazo de Pagos. Si el brazo no
+  mide el fenómeno por rate limit, fallback o error de instrumentación, se invalida y se repite.
+- Acordar thresholds/SLO antes de ejecutar; no moverlos después de ver resultados.
+- No fabricar métricas, cargas ni respuestas. Si un brazo no se ejecutó, se declara ausente.
 
 ## Mediciones
 
@@ -54,6 +89,10 @@ Cabecera prevista; no hay filas ni resultados fabricados en este documento:
 timestamp,scenario,arm,repetition,warmup,request_count,latency_p50_ms,latency_p95_ms,latency_p99_ms,http_status,error_code,circuit_state,bulkhead_rejected,rate_limited,stock_final,idempotent_effects,notes
 ```
 
+La cabecera actual basta para separar `rate_limited`, `circuit_state` y `bulkhead_rejected`. Si P2
+expone un fallback de pago con un nombre propio, se añade una columna antes de ejecutar y se deja
+vacía hasta tener datos reales. No se rellenan filas ficticias.
+
 ## Reproducibilidad
 
 - Fijar versiones, imágenes, contratos y semillas antes de cada serie.
@@ -65,7 +104,8 @@ timestamp,scenario,arm,repetition,warmup,request_count,latency_p50_ms,latency_p9
 - Separar artefactos de prueba de volúmenes persistentes. No borrar volúmenes para “limpiar”
   resultados.
 
-## Decisión pendiente
+## Ownership
 
-La ejecución, los toggles de falla y las métricas definitivas dependen de P2/P3. Hasta entonces
-este plan es una preparación y no una garantía de comportamiento.
+P4 es responsable de la orquestación y la medición. P4 no implementa toggles de P2/P3, no ejecuta
+SQL y no apaga la compensación en E2. La ejecución de E1–E3, los toggles de falla y las métricas
+definitivas dependen de P2/P3 y de la coordinación previa.

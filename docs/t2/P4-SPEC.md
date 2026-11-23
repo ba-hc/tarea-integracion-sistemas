@@ -1,10 +1,12 @@
 # P4 — Especificación de exposición: Gateway y BFF
 
-**Estado:** contrato de exposición implementado y validado de forma aislada; integración con
-Pagos/Saga pendiente. **Línea base:** `main` en `7daf5d0` (T1 + Despacho).
+**Estado:** contrato de exposición implementado y validado de forma aislada. La Saga P3 está
+implementada en Sales; Pagos P2 sigue pendiente de integración y la Saga completa no está cerrada.
+Los códigos públicos v1.1 se tratan de forma transparente. **Línea base histórica:** `7daf5d0`
+(T1 + Despacho). **Snapshot de esta fase:** `main` `338681d`.
 **Alcance:** fijar el comportamiento observable del Gateway y del BFF. Este documento conserva las
-decisiones de la fase de especificación; la evidencia de implementación y pruebas está en
-[VERIFICATION.md](VERIFICATION.md).
+decisiones de la fase de especificación; la evidencia actual está en
+[VERIFICATION.md](VERIFICATION.md), §9, y la compatibilidad P3 se detalla en §16.
 
 ## 1. Alcance y decisiones
 
@@ -195,8 +197,8 @@ ni llega a un upstream.
   `POST /v1/orders` o la cancelación quedan ambiguos, el cliente debe reintentar con la misma
   `Idempotency-Key` (creación) o repetir la cancelación idempotente de T1. El Gateway no compensa, no
   libera stock y no promete que el efecto no ocurrió.
-- El presupuesto de una futura Saga y la recuperación de pagos/despachos se acuerdan en P3; P4 no
-  adelanta compensaciones ni estados públicos nuevos.
+- El presupuesto de la Saga y la recuperación de pagos/despachos están definidos en P3; P4 no
+  implementa compensaciones ni estados públicos nuevos.
 - Errores locales de upstream: `503 UPSTREAM_UNAVAILABLE` para red/DNS/TLS, respuesta inválida, `3xx`
   o cuerpo excesivo; `504 UPSTREAM_TIMEOUT` para deadline. Ambos con envelope
   `{code,message,traceId}` y mensaje genérico.
@@ -359,7 +361,8 @@ Reglas adicionales:
 
 ## 12. Empaquetado opt-in
 
-- El Compose raíz **permanece intacto**. La integración final a un único
+- El Compose raíz **permanece intacto**. Ya contiene T1 + Despacho y la Saga P3 en modo stock
+  (`SAGA_STEPS=stock`); P4 no lo modifica. La integración final a un único
   `docker compose up --build` queda pendiente de coordinación con P2/P3.
 - El empaquetado P4 usa un overlay separado, `docker-compose.p4.yml`, de forma opt-in:
   `docker compose -f docker-compose.yml -f docker-compose.p4.yml up --build`.
@@ -375,10 +378,11 @@ Reglas adicionales:
 
 Criterios de aceptación; la evidencia real está en [VERIFICATION.md](VERIFICATION.md). Las pruebas
 unitarias y de integración usan stubs HTTP locales en `127.0.0.1:0` (puertos efímeros) y un reloj
-controlado para rate limit; no requieren Docker ni un Pagos real. En la preparación, Pagos se
-simula con fixtures; la integración real con Pagos queda pendiente de P2. El smoke P4 usa
-Sales/Despacho reales y un fixture aislado de Despacho; no usa Pagos real. Cada escenario que llega
-al upstream verifica que recibió **una sola** llamada, para demostrar ausencia de retry.
+controlado para rate limit; no requieren Docker ni un Pagos real. En pruebas, Pagos se simula con
+fixtures; la integración real con Pagos queda pendiente de P2. El smoke P4 usa Sales real y
+Despacho real cuando el modo lo usa; no usa Pagos real. La fixture sintética de Despacho es opcional
+sólo en `stock` y no es evidencia de Saga. Cada escenario que llega al upstream verifica que recibió
+**una sola** llamada, para demostrar ausencia de retry.
 
 ### 13.1 Gateway: autenticación y autorización
 
@@ -470,19 +474,65 @@ Gateway, BFF, Pagos ni Saga**:
 - `POST /v1/customers` con `reader`: `403`.
 - `apps/dispatch-api/test/dispatch.integration.mjs`: 4 pruebas pasaron.
 
-La verificación P4 posterior (Gateway, BFF, overlay y smoke) está en
-[VERIFICATION.md](VERIFICATION.md). Pagos y Saga no se verificaron.
+La verificación P4 previa (Gateway, BFF, overlay y smoke sobre `7daf5d0`) está en
+[VERIFICATION.md](VERIFICATION.md). Pagos y Saga no se verificaron allí.
+
+La evidencia actual del snapshot `main` `338681d` + delta P4 sin commit está en
+[VERIFICATION.md](VERIFICATION.md), §9. Incluye la corrida real del runner con `stock`,
+`stock,dispatch` y `DISPATCH_FAIL_CREATE=true`, sin Pagos. La línea base `7daf5d0` de arriba se
+conserva como histórica.
 
 ## 15. Pendientes de coordinación
 
-La exposición P4 está implementada y validada de forma aislada; ver
-[VERIFICATION.md](VERIFICATION.md). Sigue pendiente:
+La exposición P4 está implementada; la evidencia actual está en
+[VERIFICATION.md](VERIFICATION.md), §9. Sigue pendiente:
 
-- Contrato definitivo de Pagos y su autenticación interna (P2).
-- Saga, compensaciones y presupuesto de recuperación (P3).
+- Integración real de Pagos (P2) con la Saga implementada en P3.
+- Validación de la Saga completa con Pagos real y coordinación de `SAGA_STEPS`/smoke.
 - Integración final en un único `docker compose up --build`.
 - TLS/ingress, frontend, login/refresh, CORS y rate limit compartido entre instancias.
 - Evidencia de sistema con Pagos real y la Saga completa.
 
 **T2-401 no se declara integrado final por esta especificación.** Es un contrato de exposición
 adelantado, verificable de forma aislada, que espera la integración coordinada con P2/P3.
+
+## 16. Fase P3: compatibilidad de exposición (modos implementados)
+
+La Saga P3 vive en `apps/sales-api/src/saga`; Pagos P2 no existe todavía en `apps/`. El contrato
+público v1.1 agrega `422 PAYMENT_DECLINED`, `503 PAYMENT_UNAVAILABLE`/`DISPATCH_UNAVAILABLE` y
+`504 PAYMENT_TIMEOUT`/`DISPATCH_TIMEOUT`. P4 no implementa la Saga ni compensa: el Gateway
+preserva esos errores y el BFF sólo consulta los estados de Pagos.
+
+Modos implementados y verificados en esta fase:
+
+- `tests/t2/p4-smoke.mjs` detecta el `SAGA_STEPS` real de `sales-api` antes de mutar y acepta sólo
+  `stock` y `stock,dispatch`. Un `P4_SMOKE_EXPECT_STEPS` explícito se valida contra el valor real;
+  un modo con `payment` o `full` termina con «pendiente de integración P2» y no simula éxito. Los
+  comandos Compose respetan `COMPOSE_PROJECT_NAME` y `COMPOSE_ENV_FILES`.
+- `stock` conserva las aserciones anteriores del resumen sin Pagos/Despacho. `stock,dispatch`
+  crea la venta por Gateway, exige resumen `200 partial:true` con pago `unavailable` y despacho
+  `CREATED` con el mismo `orderId`/items, replay estable y cancelación doble que deja Sales y el
+  despacho en `CANCELLED`. Reader GET/POST, JWT y rate limit siguen siendo reales.
+- `tests/t2/p4-independent.mjs` usa un proyecto aislado `repuestossur-p4-*` (por defecto
+  `repuestossur-p4-independent`) y un puerto propio (8081 por defecto). Preflight de labels,
+  archivos Compose y servicios; un puerto ocupado falla sin matar procesos. `--no-build` reutiliza
+  las imágenes construidas. Ejecuta los tres escenarios secuenciales, mide el stock con un
+  `GetPart` de sólo lectura y restaura `DISPATCH_FAIL_CREATE=false` y el `SAGA_STEPS` inicial (o
+  `stock,dispatch`) en `finally`; si la restauración falla, termina distinto de cero. No usa
+  `down`, no borra volúmenes, no agrega Pagos ni mocks de runtime.
+- `docker-compose.p4.yml` publica el Gateway en
+  `127.0.0.1:${P4_GATEWAY_PUBLISHED_PORT:-8080}:8080`; el runner fija ese puerto al suyo. El
+  Compose raíz conserva `SAGA_STEPS=stock`.
+- La cobertura de Gateway, BFF y agregación del bloque anterior se conserva; no se duplicó.
+
+Resultados verificados en [VERIFICATION.md](VERIFICATION.md), §9: la corrida real del runner terminó
+`exit 0`; `stock` y `stock,dispatch` dejaron el stock `5 → 5`, sin fixture sintética; el fallo de
+Despacho devolvió `503 DISPATCH_UNAVAILABLE`, replay con el mismo código/mensaje, cero órdenes
+públicas y stock `5 → 5 → 5`; la restauración quedó verificada con
+`SAGA_STEPS=stock,dispatch` y `DISPATCH_FAIL_CREATE=false`. No hay Pagos reales, cobro, reembolso,
+Circuit Breaker/Bulkhead ni Saga de tres pasos. La compensación observada es sólo de stock y no
+prueba atomicidad de P1.
+
+Límites: Pagos P2 y la Saga de tres pasos siguen pendientes; el fallo de Despacho sólo verifica la
+compensación de stock sin cobro. `GetPart` es una sonda de observabilidad, no una prueba de
+atomicidad de P1 ni un endpoint nuevo. La evidencia de `7daf5d0` se conserva como histórica.

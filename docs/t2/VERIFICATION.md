@@ -1,9 +1,13 @@
 # Verificación P4 — Gateway y BFF
 
-**Estado:** contrato de exposición implementado y validado de forma aislada.
-**T2-401 adelantado parcial; T2-402/T2-403 preparación; integración final pendiente.**
-La integración real con Pagos (P2) y la Saga/compensación (P3) sigue pendiente. Este documento no
-certifica seguridad de producción ni una regresión completa de CI.
+**Estado actual (2026-11-22):** Gateway, BFF y los modos `stock`/`stock,dispatch` verificados con
+una corrida real del runner. Pagos P2 sigue ausente; no hay cobro, reembolso, Circuit Breaker ni
+Bulkhead reales, y la Saga completa no está cerrada. La evidencia vigente está en §9.
+
+**Leyenda histórica:** Las secciones 1–8 documentan el hito `7daf5d0` y conservan sus números y
+resultados. No describen el estado actual. Las menciones a P3/Saga como pendientes en ese hito son
+históricas: P3 está implementada en Sales, pero Pagos P2 no existe. Este documento no certifica
+seguridad de producción ni una regresión completa de CI.
 
 ## 1. Línea base
 
@@ -102,6 +106,8 @@ deuda de auditoría. No se afirma que las vulnerabilidades estén resueltas.
 
 ## 7. Límites y pendientes
 
+Estado del hito histórico; ver §9 para el estado actual.
+
 - JWT de demo, sin proveedor de identidad ni revocación.
 - Rate limit en memoria y monoinstancia.
 - Pagos sigue siendo una propuesta P2; no hay integración real.
@@ -111,6 +117,8 @@ deuda de auditoría. No se afirma que las vulnerabilidades estén resueltas.
 - No se ejecutaron experimentos de falla ni la CI completa.
 
 ## 8. Reproducción
+
+Comandos del hito histórico; la reproducción actual está en §9.
 
 ```bash
 # Pruebas por servicio
@@ -129,3 +137,81 @@ COMPOSE_ENV_FILES=.env.p4 P4_SMOKE_DISPATCH_FIXTURE=true node tests/t2/p4-smoke.
 
 La variante de exportar `GATEWAY_JWT_SECRET` en la terminal sigue siendo válida; no se exige un
 archivo. No se publican secretos, tokens, IDs de objetos ni cuerpos crudos en este documento.
+
+## 9. Evidencia actual — 2026-11-22
+
+### 9.1 Entorno y snapshot
+
+- Linux.
+- `main` en `338681d` + delta P4 sin commit.
+- Node.js `24.21.0`; Docker Compose `5.6.0`.
+- `.env.p4` ignorado por Git, modo `0600`.
+- Cinco imágenes construidas: Sales, Inventory, Dispatch, Gateway y BFF.
+- Proyecto aislado `repuestossur-p4-independent`; Gateway publicado sólo en
+  `127.0.0.1:8081`.
+
+### 9.2 Comando y resultado
+
+Desde la raíz:
+
+```bash
+P4_TEST_PROJECT=repuestossur-p4-independent \
+P4_TEST_PORT=8081 \
+node tests/t2/p4-independent.mjs --no-build
+```
+
+Resultado: exit `0`; JSON final `status: passed`, `pagos: absent`. El runner no usó la fixture
+sintética de Despacho en ninguno de los modos. El JSON se conservó localmente durante la
+verificación; no es un requisito de reproducción ni se entrega como artefacto versionado.
+
+### 9.3 Escenarios
+
+| Escenario | Evidencia |
+|---|---|
+| `stock` | Smoke PASS. `GetPart` antes/después: `5 → 5`. Sin fixture sintética. |
+| `stock,dispatch` | Smoke PASS. Creación `201`; replay `201` con el mismo cuerpo; conflicto `409`. Resumen `200 partial:true`, Pagos `unavailable`, Despacho `available CREATED`, mismo `orderId`/items. Cancelación repetida: Sales y Despacho `CANCELLED`. `GetPart`: `5 → 5`. Sin fixture sintética. |
+| `DISPATCH_FAIL_CREATE=true` sin Pagos | `503 DISPATCH_UNAVAILABLE`; replay con el mismo código y mensaje; traza comprobada. `GET /v1/orders?customerId=…` `200` con cero órdenes; `GET /v1/customers` `200` (una lectura, no carga). `GetPart` antes/tras primer 503/tras replay: `5 → 5 → 5`. |
+
+El resumen del modo `stock` se valida contra el contrato, que admite `503` o `404`; esta corrida no
+fija un estado observado en este documento. El `503` de §5 pertenece al hito histórico. `GetPart` se
+leyó sólo antes y después; no se observó stock durante la reserva ni se usa como prueba de atomicidad
+de P1.
+
+Restauración observada:
+
+```json
+{"sagaSteps":"stock,dispatch","dispatchFailCreate":"false","verified":true}
+```
+
+Después de la corrida quedaron ocho contenedores healthy, sólo `127.0.0.1:8081` publicado, y la red
+y los volúmenes aislados conservados. El cliente y las órdenes canceladas de prueba persisten. No se
+ejecutó SQL, no se tocaron bases ajenas y no se borraron contenedores, redes ni volúmenes.
+
+La compensación observada es la de stock en el fallo de Despacho, sin Pagos: no se probó cobro,
+reembolso, Circuit Breaker, Bulkhead ni la Saga de tres pasos. No es una demostración completa ni una
+prueba de atomicidad.
+
+### 9.4 Pruebas automatizadas actuales
+
+| Suite | Resultado |
+|---|---|
+| Gateway (`npm test`) | 109 pruebas / 7 archivos |
+| BFF (`npm test`) | 102 pruebas / 6 archivos |
+| Nativas (`node --test`) | 59/59: smoke 29 + independent 24 + aggregate 6 |
+| **Total** | **270** |
+
+`npm run typecheck` y `npm run build` pasaron en Gateway y BFF. `config --services` con variables de
+entorno contaminadas quedó en 8 servicios, sin perfiles. La configuración CLI del overlay con
+`test` y `experiment` se comprobó sólo para Gateway en `8081`; no se ejecutaron esos perfiles ni
+servicios extra. No se ejecutó CI. No se hizo una auditoría npm nueva: la alerta histórica de §6 se
+conserva y no se presenta como resuelta. No hay integración real con Pagos, Circuit Breaker ni
+Bulkhead.
+
+### 9.5 Trazabilidad
+
+Un primer intento del CLI falló en el preflight por un timeout pasado como objeto, antes de tocar
+contenedores. Se corrigió la firma, se añadió una regresión y la reauditoría posterior pasó. La
+corrida reportada en §9.2 es la posterior a esa corrección.
+
+La corrida actual no registra tasas, latencias, `Retry-After` ni resultados de E1–E3; no se
+infieren ni se fabrican.
