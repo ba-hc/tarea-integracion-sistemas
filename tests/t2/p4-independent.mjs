@@ -5,13 +5,14 @@
 //
 // It uses an isolated Compose project (default repuestossur-p4-independent),
 // its own Gateway port (default 8081), and never removes containers or
-// volumes. It runs three sequential scenarios against the real stack:
+// volumes. It runs four sequential scenarios against the real stack:
 //   1. SAGA_STEPS=stock
 //   2. SAGA_STEPS=stock,dispatch
-//   3. SAGA_STEPS=stock,dispatch with DISPATCH_FAIL_CREATE=true
-// Pagos (P2) is absent: the runner never deploys a payment stub and never
-// claims a three-step Saga or a charge/refund. It restores the initial
-// SAGA_STEPS (or stock,dispatch) and DISPATCH_FAIL_CREATE=false in finally.
+//   3. SAGA_STEPS=stock,payment,dispatch
+//   4. SAGA_STEPS=stock,payment,dispatch with DISPATCH_FAIL_CREATE=true
+// Pagos is the real payments-api with the official payment-gateway-sim. It
+// restores the initial SAGA_STEPS (or stock,payment,dispatch) and
+// DISPATCH_FAIL_CREATE=false in finally.
 //
 // Configuration: P4_TEST_PROJECT, P4_TEST_PORT, P4_GATEWAY_PUBLISHED_PORT.
 // Secrets come from the terminal or a local .env.p4 (mode 600). Values are
@@ -46,9 +47,12 @@ export const REQUIRED_SERVICES = Object.freeze([
   'sales-api',
   'dispatch-api',
   'inventory-grpc',
+  'payment-gateway-sim',
+  'payments-api',
   'sales-db',
   'inventory-db',
   'dispatch-db',
+  'payments-db',
 ]);
 const COMPOSE = ['compose', '-f', COMPOSE_FILES[0], '-f', COMPOSE_FILES[1]];
 const ENV_FILE = '.env.p4';
@@ -56,7 +60,7 @@ const BUILD_TIMEOUT_MS = 25 * 60_000;
 const START_TIMEOUT_MS = 6 * 60_000;
 const SMOKE_TIMEOUT_MS = 3 * 60_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
-const SUPPORTED_RESTORE_MODES = Object.freeze(['stock', 'stock,dispatch']);
+const SUPPORTED_RESTORE_MODES = Object.freeze(['stock', 'stock,dispatch', 'stock,payment,dispatch']);
 
 export function parseArgs(argv = []) {
   let build = true;
@@ -472,6 +476,78 @@ export function getPartStock(config, {
   return stock;
 }
 
+export function buildGatewayConfigScript() {
+  return `
+try {
+  const response = await fetch('http://127.0.0.1:3010/admin/config', {
+    signal: AbortSignal.timeout(2000),
+  });
+  if (!response.ok) process.exit(2);
+  const body = await response.json();
+  process.stdout.write(JSON.stringify(body), () => process.exit(0));
+} catch {
+  process.exit(3);
+}
+`;
+}
+
+export function parseGatewayConfig(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(raw ?? ''));
+  } catch {
+    throw new Error('gateway simulator config is not valid JSON');
+  }
+  assert(parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed), 'gateway simulator config is not an object');
+  assert(
+    ['normal', 'slow', 'down', 'decline'].includes(parsed.mode),
+    `gateway simulator mode is invalid: ${parsed.mode ?? 'none'}`,
+  );
+  assert(
+    parsed.stats !== null && typeof parsed.stats === 'object' && !Array.isArray(parsed.stats),
+    'gateway simulator stats are missing',
+  );
+  const stats = {};
+  for (const key of ['chargesApproved', 'refunds', 'voids']) {
+    assert(
+      Number.isSafeInteger(parsed.stats[key]) && parsed.stats[key] >= 0,
+      `gateway simulator stat ${key} is invalid`,
+    );
+    stats[key] = parsed.stats[key];
+  }
+  return { mode: parsed.mode, stats };
+}
+
+export function gatewayDelta(before, after) {
+  return {
+    chargesApproved: after.stats.chargesApproved - before.stats.chargesApproved,
+    refunds: after.stats.refunds - before.stats.refunds,
+    voids: after.stats.voids - before.stats.voids,
+  };
+}
+
+export function getGatewayConfig(config, {
+  run,
+  timeoutMs = 10_000,
+} = {}) {
+  const composeRun = run ?? ((args, timeout) => runComposeSync(config, args, { timeoutMs: timeout }));
+  const result = composeRun([
+    'exec',
+    '-T',
+    'payment-gateway-sim',
+    'node',
+    '--input-type=module',
+    '-e',
+    buildGatewayConfigScript(),
+  ], timeoutMs);
+  if (result.status !== 0) {
+    throw new Error(`gateway simulator config probe failed (exit ${result.status ?? 'unknown'})`);
+  }
+  const text = String(result.stdout ?? '').trim();
+  if (text === '') throw new Error('gateway simulator config probe returned an empty body');
+  return parseGatewayConfig(text);
+}
+
 export function runProcessSync(command, args, {
   timeoutMs = SMOKE_TIMEOUT_MS,
   env = process.env,
@@ -517,6 +593,39 @@ export function runSmoke(config, mode, {
     throw new Error(`smoke ${mode} failed (exit ${result.status})${last === '' ? '' : `: ${last}`}`);
   }
   return { mode, status: result.status };
+}
+
+export async function runFullSuccess({
+  config,
+  stock,
+  run = (args, timeoutMs) => runComposeSync(config, args, { timeoutMs }),
+  smoke = (mode) => runSmoke(config, mode),
+  gatewayConfig = () => getGatewayConfig(config, { run }),
+  log = () => {},
+} = {}) {
+  const gatewayBefore = await gatewayConfig();
+  assert(
+    gatewayBefore.mode === 'normal',
+    `gateway simulator mode is ${gatewayBefore.mode}; expected normal before full success`,
+  );
+  const stockBefore = await stock();
+  await smoke('stock,payment,dispatch');
+  const stockAfter = await stock();
+  const gatewayAfter = await gatewayConfig();
+  assert(
+    gatewayAfter.mode === 'normal',
+    `gateway simulator mode is ${gatewayAfter.mode}; expected normal after full success`,
+  );
+  assert(stockAfter === stockBefore, 'full success did not restore the initial stock');
+  const deltas = gatewayDelta(gatewayBefore, gatewayAfter);
+  assert(deltas.chargesApproved === 1, `full success expected 1 approved charge, got ${deltas.chargesApproved}`);
+  assert(deltas.refunds === 1, `full success expected 1 refund, got ${deltas.refunds}`);
+  assert(deltas.voids === 0, `full success expected 0 voids, got ${deltas.voids}`);
+  log(
+    `[ok] full success gateway deltas (end-to-end, replay+cancel): approved=${deltas.chargesApproved} `
+    + `refunds=${deltas.refunds} voids=${deltas.voids}`,
+  );
+  return { stockBefore, stockAfter, gatewayBefore, gatewayAfter, deltas };
 }
 
 export function runComposeUp(config, args, {
@@ -609,6 +718,7 @@ export function scenarioDefinitions() {
       services: undefined,
       forceRecreate: false,
       smoke: true,
+      kind: 'smoke',
     },
     {
       name: 'stock,dispatch',
@@ -617,14 +727,25 @@ export function scenarioDefinitions() {
       services: ['sales-api', 'dispatch-api'],
       forceRecreate: true,
       smoke: true,
+      kind: 'smoke',
+    },
+    {
+      name: 'stock,payment,dispatch',
+      sagaSteps: 'stock,payment,dispatch',
+      dispatchFailCreate: false,
+      services: ['sales-api', 'dispatch-api'],
+      forceRecreate: true,
+      smoke: true,
+      kind: 'full-success',
     },
     {
       name: 'dispatch-failure',
-      sagaSteps: 'stock,dispatch',
+      sagaSteps: 'stock,payment,dispatch',
       dispatchFailCreate: true,
       services: ['dispatch-api'],
       forceRecreate: true,
       smoke: false,
+      kind: 'dispatch-failure',
     },
   ];
 }
@@ -650,10 +771,16 @@ export async function runDispatchFailure({
   http: httpClient,
   stock,
   run,
+  gatewayConfig = () => getGatewayConfig(config, { run }),
   log = () => {},
   partId = PART_ID,
   tokenProvider = tokenFromCli,
 }) {
+  const gatewayBefore = await gatewayConfig();
+  assert(
+    gatewayBefore.mode === 'normal',
+    `gateway simulator mode is ${gatewayBefore.mode}; expected normal before dispatch failure`,
+  );
   const subject = `p4-independent-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const operator = tokenProvider('operator', `${subject}-operator`, { run });
   const reader = tokenProvider('reader', `${subject}-reader`, { run });
@@ -709,6 +836,20 @@ export async function runDispatchFailure({
   if (afterFirst !== before) log(`[recovery] Idempotency-Key=${key}`);
   assert(afterFirst === before, 'dispatch failure: stock was not restored after the first 503');
 
+  const gatewayAfterFirst = await gatewayConfig();
+  assert(
+    gatewayAfterFirst.mode === 'normal',
+    `gateway simulator mode is ${gatewayAfterFirst.mode}; expected normal after the first 503`,
+  );
+  const deltas = gatewayDelta(gatewayBefore, gatewayAfterFirst);
+  assert(deltas.chargesApproved === 1, `dispatch failure expected 1 approved charge, got ${deltas.chargesApproved}`);
+  assert(deltas.refunds === 1, `dispatch failure expected 1 refund, got ${deltas.refunds}`);
+  assert(deltas.voids === 0, `dispatch failure expected 0 voids, got ${deltas.voids}`);
+  log(
+    `[ok] dispatch failure gateway deltas: approved=${deltas.chargesApproved} `
+    + `refunds=${deltas.refunds} voids=${deltas.voids}`,
+  );
+
   let replay;
   try {
     replay = await httpClient('/v1/orders', orderOptions);
@@ -724,6 +865,14 @@ export async function runDispatchFailure({
       replay.headers.get('x-trace-id') === replay.json.traceId,
       'dispatch failure replay: X-Trace-Id does not match the body traceId',
     );
+    assert(
+      replay.json.message === 'Dispatch service is unavailable',
+      'dispatch failure replay: unexpected message',
+    );
+    assert(
+      JSON.stringify(Object.keys(replay.json ?? {}).sort()) === JSON.stringify(['code', 'message', 'traceId']),
+      'dispatch failure replay: unexpected error envelope fields',
+    );
   } catch (error) {
     log(`[recovery] Idempotency-Key=${key}`);
     throw error;
@@ -732,6 +881,20 @@ export async function runDispatchFailure({
   const afterReplay = await stock();
   if (afterReplay !== before) log(`[recovery] Idempotency-Key=${key}`);
   assert(afterReplay === before, 'dispatch failure: stock was not restored after the replay');
+
+  const gatewayAfterReplay = await gatewayConfig();
+  assert(
+    gatewayAfterReplay.mode === 'normal',
+    `gateway simulator mode is ${gatewayAfterReplay.mode}; expected normal after the replay`,
+  );
+  const replayDeltas = gatewayDelta(gatewayAfterFirst, gatewayAfterReplay);
+  assert(replayDeltas.chargesApproved === 0, `dispatch replay charged again: ${replayDeltas.chargesApproved}`);
+  assert(replayDeltas.refunds === 0, `dispatch replay refunded again: ${replayDeltas.refunds}`);
+  assert(replayDeltas.voids === 0, `dispatch replay voided: ${replayDeltas.voids}`);
+  log(
+    `[ok] dispatch replay gateway deltas: approved=${replayDeltas.chargesApproved} `
+    + `refunds=${replayDeltas.refunds} voids=${replayDeltas.voids}`,
+  );
 
   for (const token of [reader, operator]) {
     const orders = await httpClient(`/v1/orders?customerId=${customerId}`, { token });
@@ -757,6 +920,11 @@ export async function runDispatchFailure({
     stockAfterFirst: afterFirst,
     stockAfter: afterReplay,
     customersStatus: customers.status,
+    gatewayBefore,
+    gatewayAfterFirst,
+    gatewayAfterReplay,
+    deltas,
+    replayDeltas,
   };
 }
 
@@ -766,9 +934,11 @@ export async function runScenarios(config, {
   smoke = (mode) => runSmoke(config, mode),
   up = (options) => upStack(config, options),
   run = (args, timeoutMs) => runComposeSync(config, args, { timeoutMs }),
+  gatewayConfig = () => getGatewayConfig(config, { run }),
+  fullSuccess = runFullSuccess,
   dispatchFailure = runDispatchFailure,
   log = () => {},
-  state = { modes: [], failure: null },
+  state = { modes: [], failure: null, gatewayMode: undefined },
 } = {}) {
   const plan = scenarioDefinitions();
 
@@ -779,6 +949,14 @@ export async function runScenarios(config, {
     build: config.build,
   });
   await waitForGateway(httpClient);
+  const gatewayInitial = await gatewayConfig();
+  assert(
+    gatewayInitial.mode === 'normal',
+    `gateway simulator mode is ${gatewayInitial.mode}; expected normal before tests`,
+  );
+  state.gatewayMode = gatewayInitial.mode;
+  log('[info] gateway counters scope: dedicated project, serial, no other loads');
+
   const stockBefore1 = await stock();
   await smoke(plan[0].sagaSteps);
   const stockAfter1 = await stock();
@@ -810,7 +988,7 @@ export async function runScenarios(config, {
     stockAfter: stockAfter2,
   });
 
-  log(`[scenario 3] ${plan[2].sagaSteps} with DISPATCH_FAIL_CREATE=true`);
+  log(`[scenario 3] ${plan[2].sagaSteps} with Pagos real`);
   await up({
     sagaSteps: plan[2].sagaSteps,
     dispatchFailCreate: plan[2].dispatchFailCreate,
@@ -818,20 +996,50 @@ export async function runScenarios(config, {
     forceRecreate: plan[2].forceRecreate,
     build: false,
   });
+  const stockBefore3 = await stock();
+  assert(stockBefore3 === stockAfter2, 'scenario 3 did not start from the scenario 2 stock');
+  const full = await fullSuccess({
+    config,
+    stock,
+    smoke,
+    run,
+    gatewayConfig,
+    log,
+  });
+  assert(full.stockBefore === stockBefore3, 'full success did not start from the scenario 2 stock');
+  state.modes.push({
+    name: plan[2].name,
+    smoke: 'passed',
+    stockBefore: full.stockBefore,
+    stockAfter: full.stockAfter,
+    gatewayBefore: full.gatewayBefore,
+    gatewayAfter: full.gatewayAfter,
+    deltas: full.deltas,
+  });
+
+  log(`[scenario 4] ${plan[3].sagaSteps} with DISPATCH_FAIL_CREATE=true`);
+  await up({
+    sagaSteps: plan[3].sagaSteps,
+    dispatchFailCreate: plan[3].dispatchFailCreate,
+    services: plan[3].services,
+    forceRecreate: plan[3].forceRecreate,
+    build: false,
+  });
   const failure = await dispatchFailure({
     config,
     http: httpClient,
     stock,
     run,
+    gatewayConfig,
     log,
   });
   assert(
-    failure.stockBefore === stockAfter2,
-    'scenario 3 did not start from the scenario 2 stock',
+    failure.stockBefore === full.stockAfter,
+    'scenario 4 did not start from the scenario 3 stock',
   );
   state.failure = failure;
   state.modes.push({
-    name: plan[2].name,
+    name: plan[3].name,
     status: failure.status,
     code: failure.code,
     replayStatus: failure.replayStatus,
@@ -841,6 +1049,8 @@ export async function runScenarios(config, {
     stockAfterFirst: failure.stockAfterFirst,
     stockAfter: failure.stockAfter,
     customersStatus: failure.customersStatus,
+    deltas: failure.deltas,
+    replayDeltas: failure.replayDeltas,
   });
 
   return state;
@@ -853,7 +1063,7 @@ export async function restoreStack(config, initialState, {
   }),
   log = () => {},
 } = {}) {
-  const sagaSteps = initialState?.sagaSteps ?? 'stock,dispatch';
+  const sagaSteps = initialState?.sagaSteps ?? 'stock,payment,dispatch';
   if (!SUPPORTED_RESTORE_MODES.includes(sagaSteps)) {
     throw new Error(`cannot restore unsupported SAGA_STEPS=${sagaSteps}`);
   }
@@ -940,7 +1150,7 @@ export async function main({
     ?? ((args, timeoutMs = 60_000) => runComposeSync(config, args, { timeoutMs }));
   let initialState = { sagaSteps: undefined, dispatchFailCreate: undefined };
   let touched = false;
-  const scenarioState = { modes: [], failure: null };
+  const scenarioState = { modes: [], failure: null, gatewayMode: undefined };
 
   const outcome = await executeWithRestore({
     run: async () => {
@@ -976,7 +1186,11 @@ export async function main({
     project: config.project,
     port: config.port,
     build: config.build,
-    pagos: 'absent',
+    pagos: 'real-service+simulated-gateway',
+    gateway: {
+      mode: scenarioState.gatewayMode ?? 'unknown',
+      countersScope: 'dedicated-project-serial',
+    },
     modes: scenarioState.modes,
     dispatchFailure: scenarioState.failure,
     restore: outcome.restored ?? { skipped: true },

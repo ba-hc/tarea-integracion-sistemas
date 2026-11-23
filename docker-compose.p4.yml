@@ -4,11 +4,14 @@
 # Requires Docker Compose with merge tags (!reset). Validated with v5.6.0;
 # upstream documents !reset from 2.24.0; the minimum version was not verified here.
 #
-# Only api-gateway publishes a host port. Sales, Inventory, BFF and Dispatch stay
-# internal. P4_GATEWAY_PUBLISHED_PORT selects that loopback host port (default
-# 8080); the isolated runner uses 8081. The root docker-compose.yml remains the
-# T1 baseline and is not edited.
-# Pagos is not a service here: BFF_PAYMENTS_BASE_URL is a provisional address.
+# Only api-gateway publishes a host port. Sales, Inventory, BFF, Dispatch,
+# Pagos and the simulated payment gateway stay internal.
+# P4_GATEWAY_PUBLISHED_PORT selects that loopback host port (default 8080); the
+# isolated runner uses 8081. The root docker-compose.yml contains P1-P3 and is
+# not edited by this overlay.
+# Pagos is the real payments-api in the root Compose; payment-gateway-sim is the
+# official simulated external gateway. No payment admin or test DB ports are
+# published by this overlay.
 
 services:
   sales-api:
@@ -21,6 +24,9 @@ services:
     ports: !reset []
 
   sales-test-db:
+    ports: !reset []
+
+  payments-test-db:
     ports: !reset []
 
   api-gateway:

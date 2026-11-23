@@ -5,16 +5,20 @@ import {
   DEFAULT_PROJECT,
   REQUIRED_SERVICES,
   buildComposeEnv,
+  buildGatewayConfigScript,
   buildGetPartScript,
   buildUpArgs,
   captureInitialState,
   composeInvocation,
   executeWithRestore,
+  gatewayDelta,
+  getGatewayConfig,
   getPartStock,
   labelsOf,
   main,
   parseArgs,
   parseComposeServices,
+  parseGatewayConfig,
   parsePsJson,
   preflight,
   projectPublishesPort,
@@ -22,6 +26,7 @@ import {
   resolveEnvFile,
   restoreStack,
   runDispatchFailure,
+  runFullSuccess,
   runScenarios,
   runSmoke,
   scenarioDefinitions,
@@ -346,6 +351,111 @@ test('GetPart probe uses the documented proto and accepts only a safe stock', ()
   assert.throws(() => buildGetPartScript('not-a-uuid'), /invalid partId/);
 });
 
+test('gateway config probe uses the fixed admin route and validates counters', () => {
+  let captured;
+  const config = getGatewayConfig({}, {
+    run: (args, timeoutMs) => {
+      captured = { args, timeoutMs };
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          mode: 'normal',
+          stats: { chargesApproved: 2, refunds: 1, voids: 0, ignored: 9 },
+        }),
+      };
+    },
+  });
+  assert.deepEqual(config, {
+    mode: 'normal',
+    stats: { chargesApproved: 2, refunds: 1, voids: 0 },
+  });
+  assert.equal(captured.args[0], 'exec');
+  assert.equal(captured.args[1], '-T');
+  assert.equal(captured.args[2], 'payment-gateway-sim');
+  assert.match(captured.args.at(-1), /http:\/\/127\.0\.0\.1:3010\/admin\/config/);
+  assert.match(captured.args.at(-1), /AbortSignal\.timeout\(2000\)/);
+  assert.equal(captured.timeoutMs, 10_000);
+  assert.match(buildGatewayConfigScript(), /\/admin\/config/);
+  assert.throws(() => parseGatewayConfig('{}'), /mode is invalid|stats are missing/);
+  assert.throws(() => parseGatewayConfig(JSON.stringify({
+    mode: 'normal',
+    stats: { chargesApproved: -1, refunds: 0, voids: 0 },
+  })), /chargesApproved is invalid/);
+  assert.throws(() => getGatewayConfig({}, {
+    run: () => ({ status: 1, stdout: '' }),
+  }), /config probe failed/);
+});
+
+test('gatewayDelta reports only the three observed counters', () => {
+  assert.deepEqual(gatewayDelta(
+    { mode: 'normal', stats: { chargesApproved: 2, refunds: 1, voids: 0 } },
+    { mode: 'normal', stats: { chargesApproved: 3, refunds: 2, voids: 0 } },
+  ), { chargesApproved: 1, refunds: 1, voids: 0 });
+});
+
+test('runFullSuccess requires normal mode and exact one-charge/one-refund deltas', async () => {
+  let smokeMode;
+  let calls = 0;
+  const before = { mode: 'normal', stats: { chargesApproved: 2, refunds: 1, voids: 0 } };
+  const after = { mode: 'normal', stats: { chargesApproved: 3, refunds: 2, voids: 0 } };
+  const result = await runFullSuccess({
+    config: {},
+    stock: async () => 5,
+    smoke: async (mode) => { smokeMode = mode; },
+    gatewayConfig: async () => (calls++ === 0 ? before : after),
+    log: () => {},
+  });
+  assert.equal(smokeMode, 'stock,payment,dispatch');
+  assert.deepEqual(result.deltas, { chargesApproved: 1, refunds: 1, voids: 0 });
+  assert.equal(result.stockBefore, 5);
+  assert.equal(result.stockAfter, 5);
+
+  let smokeCalls = 0;
+  await assert.rejects(runFullSuccess({
+    config: {},
+    stock: async () => 5,
+    smoke: async () => { smokeCalls += 1; },
+    gatewayConfig: async () => ({
+      mode: 'slow',
+      stats: { chargesApproved: 0, refunds: 0, voids: 0 },
+    }),
+  }), /expected normal/);
+  assert.equal(smokeCalls, 0);
+
+  await assert.rejects(runFullSuccess({
+    config: {},
+    stock: async () => 5,
+    smoke: async () => {},
+    gatewayConfig: async () => before,
+  }), /expected 1 approved charge/);
+
+  let wrongRefundCalls = 0;
+  await assert.rejects(runFullSuccess({
+    config: {},
+    stock: async () => 5,
+    smoke: async () => {},
+    gatewayConfig: async () => {
+      wrongRefundCalls += 1;
+      return wrongRefundCalls === 1
+        ? before
+        : { mode: 'normal', stats: { chargesApproved: 3, refunds: 3, voids: 0 } };
+    },
+  }), /expected 1 refund/);
+
+  let wrongVoidCalls = 0;
+  await assert.rejects(runFullSuccess({
+    config: {},
+    stock: async () => 5,
+    smoke: async () => {},
+    gatewayConfig: async () => {
+      wrongVoidCalls += 1;
+      return wrongVoidCalls === 1
+        ? before
+        : { mode: 'normal', stats: { chargesApproved: 3, refunds: 2, voids: 1 } };
+    },
+  }), /expected 0 voids/);
+});
+
 test('captureInitialState reads the real container env before mutations', () => {
   const run = (args) => {
     if (args.includes('sales-api')) return { status: 0, stdout: 'stock,dispatch\n' };
@@ -360,13 +470,23 @@ test('captureInitialState reads the real container env before mutations', () => 
     sagaSteps: undefined,
     dispatchFailCreate: undefined,
   });
-  assert.throws(() => captureInitialState({}, {
+  assert.deepEqual(captureInitialState({}, {
     entries: [{}],
     run: (args) => ({
       status: 0,
       stdout: args.includes('sales-api') ? 'stock,payment,dispatch' : 'false',
     }),
-  }), /pendiente de integración P2/);
+  }), {
+    sagaSteps: 'stock,payment,dispatch',
+    dispatchFailCreate: 'false',
+  });
+  assert.throws(() => captureInitialState({}, {
+    entries: [{}],
+    run: (args) => ({
+      status: 0,
+      stdout: args.includes('sales-api') ? 'stock,payment' : 'false',
+    }),
+  }), /no soportado/);
 });
 
 test('restoreStack always sets DISPATCH_FAIL_CREATE=false and verifies the result', async () => {
@@ -393,8 +513,12 @@ test('restoreStack always sets DISPATCH_FAIL_CREATE=false and verifies the resul
   }), /docker down/);
   assert.equal((await restoreStack({}, {}, {
     up: async () => {},
-    readEnv: (service) => service === 'sales-api' ? 'stock,dispatch' : 'false',
-  })).sagaSteps, 'stock,dispatch');
+    readEnv: (service) => service === 'sales-api' ? 'stock,payment,dispatch' : 'false',
+  })).sagaSteps, 'stock,payment,dispatch');
+  assert.equal((await restoreStack({}, { sagaSteps: 'stock,payment,dispatch' }, {
+    up: async () => {},
+    readEnv: (service) => service === 'sales-api' ? 'stock,payment,dispatch' : 'false',
+  })).sagaSteps, 'stock,payment,dispatch');
 });
 
 test('executeWithRestore always attempts restore after a scenario failure', async () => {
@@ -457,8 +581,12 @@ test('preflight checks config, services, labels and port without touching Docker
   }), /missing required services/);
 });
 
-test('dispatch failure scenario rejects 503 and verifies stock without Pagos', async () => {
+test('dispatch failure charges once, refunds once and does not repeat on replay', async () => {
   let stockCalls = 0;
+  let gatewayCalls = 0;
+  const gatewayBefore = { mode: 'normal', stats: { chargesApproved: 2, refunds: 1, voids: 0 } };
+  const gatewayAfterFirst = { mode: 'normal', stats: { chargesApproved: 3, refunds: 2, voids: 0 } };
+  const gatewayAfterReplay = { mode: 'normal', stats: { chargesApproved: 3, refunds: 2, voids: 0 } };
   const http = async (path, options = {}) => {
     if (path === '/v1/customers' && options.method === 'POST') {
       return response(201, { id: CUSTOMER_ID });
@@ -484,20 +612,49 @@ test('dispatch failure scenario rejects 503 and verifies stock without Pagos', a
       return 5;
     },
     run: () => {},
+    gatewayConfig: async () => {
+      const values = [gatewayBefore, gatewayAfterFirst, gatewayAfterReplay];
+      return values[gatewayCalls++];
+    },
     tokenProvider: (role) => `${role}-token`,
   });
-  assert.deepEqual(result, {
-    status: 503,
-    code: 'DISPATCH_UNAVAILABLE',
-    replayStatus: 503,
-    replayCode: 'DISPATCH_UNAVAILABLE',
-    publicOrders: 0,
-    stockBefore: 5,
-    stockAfterFirst: 5,
-    stockAfter: 5,
-    customersStatus: 200,
-  });
+  assert.equal(result.status, 503);
+  assert.equal(result.code, 'DISPATCH_UNAVAILABLE');
+  assert.equal(result.replayStatus, 503);
+  assert.equal(result.replayCode, 'DISPATCH_UNAVAILABLE');
+  assert.equal(result.publicOrders, 0);
+  assert.equal(result.stockBefore, 5);
+  assert.equal(result.stockAfterFirst, 5);
+  assert.equal(result.stockAfter, 5);
+  assert.equal(result.customersStatus, 200);
+  assert.deepEqual(result.deltas, { chargesApproved: 1, refunds: 1, voids: 0 });
+  assert.deepEqual(result.replayDeltas, { chargesApproved: 0, refunds: 0, voids: 0 });
   assert.equal(stockCalls, 3);
+  assert.equal(gatewayCalls, 3);
+});
+
+test('dispatch failure refuses a non-normal simulator before mutation', async () => {
+  let stockCalls = 0;
+  let httpCalls = 0;
+  await assert.rejects(runDispatchFailure({
+    config: {},
+    http: async () => {
+      httpCalls += 1;
+      return response(503, { code: 'DISPATCH_UNAVAILABLE', message: 'unexpected', traceId: TRACE_ID });
+    },
+    stock: async () => {
+      stockCalls += 1;
+      return 5;
+    },
+    run: () => {},
+    gatewayConfig: async () => ({
+      mode: 'down',
+      stats: { chargesApproved: 0, refunds: 0, voids: 0 },
+    }),
+    tokenProvider: (role) => `${role}-token`,
+  }), /expected normal/);
+  assert.equal(stockCalls, 0);
+  assert.equal(httpCalls, 0);
 });
 
 test('dispatch failure logs the recovery key and fails on an unexpected 500', async () => {
@@ -520,6 +677,10 @@ test('dispatch failure logs the recovery key and fails on an unexpected 500', as
       return 5;
     },
     run: () => {},
+    gatewayConfig: async () => ({
+      mode: 'normal',
+      stats: { chargesApproved: 0, refunds: 0, voids: 0 },
+    }),
     tokenProvider: (role) => `${role}-token`,
     log: (message) => logs.push(message),
   }), /expected HTTP 503, got 500/);
@@ -527,18 +688,22 @@ test('dispatch failure logs the recovery key and fails on an unexpected 500', as
   assert.ok(logs.some((message) => message.includes('Idempotency-Key=')));
 });
 
-test('scenario definitions preserve the stock -> stock,dispatch -> failure order', () => {
+test('scenario definitions preserve stock, stock,dispatch, full success and full failure order', () => {
   const plan = scenarioDefinitions();
   assert.deepEqual(plan.map((scenario) => scenario.name), [
     'stock',
     'stock,dispatch',
+    'stock,payment,dispatch',
     'dispatch-failure',
   ]);
   assert.equal(plan[0].sagaSteps, 'stock');
   assert.deepEqual(plan[1].services, ['sales-api', 'dispatch-api']);
-  assert.equal(plan[2].sagaSteps, 'stock,dispatch');
-  assert.equal(plan[2].dispatchFailCreate, true);
-  assert.deepEqual(plan[2].services, ['dispatch-api']);
+  assert.equal(plan[2].sagaSteps, 'stock,payment,dispatch');
+  assert.equal(plan[2].kind, 'full-success');
+  assert.deepEqual(plan[2].services, ['sales-api', 'dispatch-api']);
+  assert.equal(plan[3].sagaSteps, 'stock,payment,dispatch');
+  assert.equal(plan[3].dispatchFailCreate, true);
+  assert.deepEqual(plan[3].services, ['dispatch-api']);
 });
 
 test('upStack keeps the cleaned Compose env and adds only scenario overrides', async () => {
@@ -608,6 +773,17 @@ test('main composes preflight with numeric timeouts and no Docker', async () => 
           stock: async () => 5,
           smoke: async () => {},
           up: async () => {},
+          gatewayConfig: async () => ({
+            mode: 'normal',
+            stats: { chargesApproved: 0, refunds: 0, voids: 0 },
+          }),
+          fullSuccess: async () => ({
+            stockBefore: 5,
+            stockAfter: 5,
+            gatewayBefore: { mode: 'normal', stats: { chargesApproved: 0, refunds: 0, voids: 0 } },
+            gatewayAfter: { mode: 'normal', stats: { chargesApproved: 1, refunds: 1, voids: 0 } },
+            deltas: { chargesApproved: 1, refunds: 1, voids: 0 },
+          }),
           dispatchFailure: async () => ({
             status: 503,
             code: 'DISPATCH_UNAVAILABLE',
@@ -618,11 +794,13 @@ test('main composes preflight with numeric timeouts and no Docker', async () => 
             stockAfterFirst: 5,
             stockAfter: 5,
             customersStatus: 200,
+            deltas: { chargesApproved: 1, refunds: 1, voids: 0 },
+            replayDeltas: { chargesApproved: 0, refunds: 0, voids: 0 },
           }),
         },
         restore: {
           up: async () => {},
-          readEnv: (service) => service === 'sales-api' ? 'stock,dispatch' : 'false',
+          readEnv: (service) => service === 'sales-api' ? 'stock,payment,dispatch' : 'false',
         },
       },
     });
@@ -632,9 +810,14 @@ test('main composes preflight with numeric timeouts and no Docker', async () => 
   }
 
   assert.equal(report.status, 'passed');
-  assert.equal(report.modes.length, 3);
+  assert.equal(report.modes.length, 4);
+  assert.equal(report.pagos, 'real-service+simulated-gateway');
+  assert.deepEqual(report.gateway, {
+    mode: 'normal',
+    countersScope: 'dedicated-project-serial',
+  });
   assert.deepEqual(report.restore, {
-    sagaSteps: 'stock,dispatch',
+    sagaSteps: 'stock,payment,dispatch',
     dispatchFailCreate: 'false',
     verified: true,
   });
@@ -694,9 +877,28 @@ test('runSmoke scopes the child env and strips caller tokens', () => {
   });
 });
 
-test('runScenarios executes the three modes in order with scoped recreation', async () => {
+test('runScenarios refuses a non-normal simulator before any smoke', async () => {
+  let smokeCalls = 0;
+  await assert.rejects(runScenarios({
+    baseUrl: 'http://127.0.0.1:8081',
+    build: false,
+    composeEnv: {},
+  }, {
+    http: async () => ({ status: 200, json: { service: 'gateway' } }),
+    stock: async () => 5,
+    smoke: async () => { smokeCalls += 1; },
+    up: async () => {},
+    gatewayConfig: async () => ({
+      mode: 'slow',
+      stats: { chargesApproved: 0, refunds: 0, voids: 0 },
+    }),
+  }), /expected normal before tests/);
+  assert.equal(smokeCalls, 0);
+});
+
+test('runScenarios executes the four modes in order with scoped recreation', async () => {
   const calls = [];
-  const state = { modes: [], failure: null };
+  const state = { modes: [], failure: null, gatewayMode: undefined };
   const result = await runScenarios({
     baseUrl: 'http://127.0.0.1:8081',
     build: false,
@@ -714,6 +916,17 @@ test('runScenarios executes the three modes in order with scoped recreation', as
         String(options.forceRecreate ?? false),
       ].join(':'));
     },
+    gatewayConfig: async () => ({
+      mode: 'normal',
+      stats: { chargesApproved: 0, refunds: 0, voids: 0 },
+    }),
+    fullSuccess: async () => ({
+      stockBefore: 5,
+      stockAfter: 5,
+      gatewayBefore: { mode: 'normal', stats: { chargesApproved: 0, refunds: 0, voids: 0 } },
+      gatewayAfter: { mode: 'normal', stats: { chargesApproved: 1, refunds: 1, voids: 0 } },
+      deltas: { chargesApproved: 1, refunds: 1, voids: 0 },
+    }),
     dispatchFailure: async () => ({
       status: 503,
       code: 'DISPATCH_UNAVAILABLE',
@@ -724,6 +937,8 @@ test('runScenarios executes the three modes in order with scoped recreation', as
       stockAfterFirst: 5,
       stockAfter: 5,
       customersStatus: 200,
+      deltas: { chargesApproved: 1, refunds: 1, voids: 0 },
+      replayDeltas: { chargesApproved: 0, refunds: 0, voids: 0 },
     }),
     state,
     log: () => {},
@@ -733,9 +948,12 @@ test('runScenarios executes the three modes in order with scoped recreation', as
     'smoke:stock',
     'up:stock,dispatch:false:sales-api+dispatch-api:true',
     'smoke:stock,dispatch',
-    'up:stock,dispatch:true:dispatch-api:true',
+    'up:stock,payment,dispatch:false:sales-api+dispatch-api:true',
+    'up:stock,payment,dispatch:true:dispatch-api:true',
   ]);
-  assert.equal(result.modes.length, 3);
+  assert.equal(result.modes.length, 4);
+  assert.equal(result.gatewayMode, 'normal');
   assert.equal(result.failure.code, 'DISPATCH_UNAVAILABLE');
-  assert.equal(result.modes[2].stockBefore, 5);
+  assert.deepEqual(result.modes[2].deltas, { chargesApproved: 1, refunds: 1, voids: 0 });
+  assert.deepEqual(result.modes[3].replayDeltas, { chargesApproved: 0, refunds: 0, voids: 0 });
 });

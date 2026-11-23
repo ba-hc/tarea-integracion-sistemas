@@ -367,17 +367,23 @@ test('parseSagaSteps normalizes and rejects malformed lists', () => {
   assert.throws(() => parseSagaSteps(undefined), /missing/);
 });
 
-test('resolveSmokeMode accepts only stock and stock,dispatch and fails closed on payment', () => {
+test('resolveSmokeMode accepts stock, stock,dispatch and the full Saga', () => {
   assert.equal(resolveSmokeMode({ actual: 'stock' }), 'stock');
   assert.equal(resolveSmokeMode({ actual: ' stock, dispatch ' }), 'stock,dispatch');
-  assert.equal(resolveSmokeMode({ actual: 'stock', expected: 'stock' }), 'stock');
+  assert.equal(resolveSmokeMode({ actual: 'stock,payment,dispatch' }), 'stock,payment,dispatch');
+  assert.equal(resolveSmokeMode({ actual: 'stock,payment,dispatch', expected: 'full' }), 'stock,payment,dispatch');
+  assert.equal(resolveSmokeMode({ actual: 'stock,dispatch', expected: 'stock,dispatch' }), 'stock,dispatch');
   assert.throws(
-    () => resolveSmokeMode({ actual: 'stock,payment,dispatch' }),
-    /pendiente de integración P2/,
+    () => resolveSmokeMode({ actual: 'stock,payment' }),
+    /no soportado/,
   );
   assert.throws(
-    () => resolveSmokeMode({ actual: 'stock,dispatch', expected: 'full' }),
-    /pendiente de integración P2/,
+    () => resolveSmokeMode({ actual: 'stock,dispatch,payment' }),
+    /no soportado/,
+  );
+  assert.throws(
+    () => resolveSmokeMode({ actual: 'stock,payment,dispatch', expected: 'stock,payment' }),
+    /no soportado/,
   );
   assert.throws(
     () => resolveSmokeMode({ actual: 'stock,dispatch', expected: 'stock' }),
@@ -479,54 +485,101 @@ test('composeEnvironment copies COMPOSE_PROJECT_NAME and COMPOSE_ENV_FILES witho
   assert.equal(base.COMPOSE_PROJECT_NAME, 'repuestossur-p4-independent');
 });
 
-test('assertSummary accepts the two supported stock,dispatch summaries', () => {
+test('assertSummary accepts stock,dispatch and full summaries with strict projection', () => {
   const orderId = '11111111-1111-4111-8111-111111111111';
   const items = [{ partId: PART_ID, quantity: 1 }];
-  const created = {
+  const partial = {
     status: 200,
     text: '',
     json: {
       orderId,
       partial: true,
-      payment: { availability: 'unavailable' },
+      payment: { availability: 'not_found' },
       dispatch: { availability: 'available', data: { orderId, status: 'CREATED', items } },
     },
   };
-  assert.doesNotThrow(() => assertSummary(created, {
+  assert.doesNotThrow(() => assertSummary(partial, {
     statuses: [200],
     partial: true,
-    paymentAvailability: 'unavailable',
+    paymentAvailability: 'not_found',
     dispatchAvailability: 'available',
     dispatchStatus: 'CREATED',
     orderId,
     items,
     forbidPaymentStatus: 'CHARGED',
   }));
-  assert.throws(() => assertSummary({ ...created, json: { ...created.json, partial: false } }, {
+
+  const full = {
+    status: 200,
+    text: '',
+    json: {
+      orderId,
+      partial: false,
+      payment: { availability: 'available', data: { orderId, status: 'CHARGED' } },
+      dispatch: { availability: 'available', data: { orderId, status: 'CREATED', items } },
+    },
+  };
+  const fullExpectation = {
     statuses: [200],
-    partial: true,
-  }), /partial/);
-  assert.throws(() => assertSummary({ ...created, json: {
-    ...created.json,
-    payment: { availability: 'available', data: { status: 'CHARGED' } },
-  } }, {
-    statuses: [200],
-    paymentAvailability: 'unavailable',
-    forbidPaymentStatus: 'CHARGED',
-  }), /payment unavailable/);
-  assert.throws(() => assertSummary({ ...created, json: {
-    ...created.json,
-    dispatch: { availability: 'available', data: { orderId, status: 'CANCELLED', items } },
-  } }, {
-    statuses: [200],
+    partial: false,
+    paymentAvailability: 'available',
+    paymentStatus: 'CHARGED',
     dispatchAvailability: 'available',
     dispatchStatus: 'CREATED',
     orderId,
     items,
-  }), /dispatch status/);
+  };
+  assert.doesNotThrow(() => assertSummary(full, fullExpectation));
+
+  const refunded = {
+    ...full,
+    json: {
+      ...full.json,
+      payment: { availability: 'available', data: { orderId, status: 'REFUNDED' } },
+      dispatch: { availability: 'available', data: { orderId, status: 'CANCELLED', items } },
+    },
+  };
+  assert.doesNotThrow(() => assertSummary(refunded, {
+    ...fullExpectation,
+    paymentStatus: 'REFUNDED',
+    dispatchStatus: 'CANCELLED',
+  }));
+
+  assert.throws(() => assertSummary({ ...full, json: { ...full.json, partial: true } }, fullExpectation), /partial/);
+  assert.throws(() => assertSummary({
+    ...full,
+    json: {
+      ...full.json,
+      payment: { ...full.json.payment, data: { ...full.json.payment.data, amountMinor: 10000 } },
+    },
+  }, fullExpectation), /payment\.data keys/);
+  assert.throws(() => assertSummary({
+    ...full,
+    json: { ...full.json, currency: 'CLP' },
+  }, fullExpectation), /summary keys/);
+  assert.throws(() => assertSummary({
+    ...full,
+    json: {
+      ...full.json,
+      dispatch: {
+        ...full.json.dispatch,
+        data: {
+          ...full.json.dispatch.data,
+          items: [{ ...items[0], sku: 'extra' }],
+        },
+      },
+    },
+  }, fullExpectation), /dispatch\.items/);
+  assert.throws(() => assertSummary({
+    ...full,
+    json: {
+      ...full.json,
+      dispatch: { ...full.json.dispatch, data: { ...full.json.dispatch.data, status: 'CANCELLED' } },
+    },
+  }, fullExpectation), /dispatch status/);
 });
 
-test('assertSummary validates stock-mode source codes and rejects CHARGED', () => {
+test('assertSummary validates error sources and rejects a false CHARGED', () => {
   const unavailable = {
     status: 503,
     text: '{"code":"UPSTREAM_UNAVAILABLE"}',
@@ -554,7 +607,7 @@ test('assertSummary validates stock-mode source codes and rejects CHARGED', () =
   assert.throws(() => assertSummary({ ...unavailable, status: 200, json: {
     orderId: '11111111-1111-4111-8111-111111111111',
     partial: true,
-    payment: { availability: 'available', data: { status: 'CHARGED' } },
+    payment: { availability: 'available', data: { orderId: '11111111-1111-4111-8111-111111111111', status: 'CHARGED' } },
     dispatch: { availability: 'unavailable' },
   } }, {
     statuses: [200],
@@ -572,8 +625,13 @@ test('assertSummary validates stock-mode source codes and rejects CHARGED', () =
   }));
 });
 
-test('assertStockSummary accepts 503/404 and rejects other statuses or codes', () => {
+test('assertStockSummary requires 404 SUMMARY_NOT_FOUND and rejects other outcomes', () => {
   assert.doesNotThrow(() => assertStockSummary({
+    status: 404,
+    text: '{"code":"SUMMARY_NOT_FOUND"}',
+    json: { code: 'SUMMARY_NOT_FOUND', message: 'No summary sources found for this order', traceId: '33333333-3333-4333-8333-333333333333' },
+  }, 'stock summary'));
+  assert.throws(() => assertStockSummary({
     status: 503,
     text: '{"code":"UPSTREAM_UNAVAILABLE"}',
     json: {
@@ -582,25 +640,19 @@ test('assertStockSummary accepts 503/404 and rejects other statuses or codes', (
       traceId: '22222222-2222-4222-8222-222222222222',
       details: { sources: { payment: 'unavailable', dispatch: 'not_found' } },
     },
-  }, 'stock summary'));
-  assert.doesNotThrow(() => assertStockSummary({
-    status: 404,
-    text: '{"code":"SUMMARY_NOT_FOUND"}',
-    json: { code: 'SUMMARY_NOT_FOUND', message: 'No summary sources found for this order', traceId: '33333333-3333-4333-8333-333333333333' },
-  }, 'stock summary'));
+  }, 'stock summary'), /expected HTTP 404/);
   assert.throws(() => assertStockSummary({
     status: 200,
     text: '{"partial":true}',
     json: { orderId: '11111111-1111-4111-8111-111111111111', partial: true },
-  }, 'stock summary'), /expected 503 or 404/);
+  }, 'stock summary'), /expected HTTP 404/);
   assert.throws(() => assertStockSummary({
-    status: 503,
-    text: '{"code":"SUMMARY_NOT_FOUND"}',
+    status: 404,
+    text: '{"code":"UPSTREAM_UNAVAILABLE"}',
     json: {
-      code: 'SUMMARY_NOT_FOUND',
-      message: 'No summary sources found for this order',
+      code: 'UPSTREAM_UNAVAILABLE',
+      message: 'One or more summary sources are unavailable',
       traceId: '33333333-3333-4333-8333-333333333333',
-      details: { sources: { payment: 'unavailable', dispatch: 'not_found' } },
     },
   }, 'stock summary'), /expected code/);
 });

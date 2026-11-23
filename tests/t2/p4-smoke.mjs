@@ -2,12 +2,13 @@
 // P4 system smoke. Run from the repository root:
 //   node tests/t2/p4-smoke.mjs
 // Optional: GATEWAY_BASE_URL, GATEWAY_READER_TOKEN, GATEWAY_OPERATOR_TOKEN,
-//           P4_SMOKE_EXPECT_STEPS=stock|stock,dispatch,
+//           P4_SMOKE_EXPECT_STEPS=stock|stock,dispatch|stock,payment,dispatch|full,
 //           P4_SMOKE_DISPATCH_FIXTURE=true.
 // The smoke reads SAGA_STEPS from the real sales-api container before any
-// mutation. It supports only stock and stock,dispatch; a Saga with payment is
-// rejected until Pagos (P2) exists. Compose exec respects COMPOSE_PROJECT_NAME
-// and COMPOSE_ENV_FILES. Tokens are never printed. The script cancels its test
+// mutation. It supports stock, stock,dispatch and the full three-step Saga with
+// the real payments-api and the simulated gateway. Unsupported subsets are
+// rejected honestly. Compose exec respects COMPOSE_PROJECT_NAME and
+// COMPOSE_ENV_FILES. Tokens are never printed. The script cancels its test
 // orders/dispatch in finally.
 
 import { randomUUID } from 'node:crypto';
@@ -17,7 +18,7 @@ import { pathToFileURL } from 'node:url';
 
 export const PART_ID = 'e58e2904-9db7-4c8d-8f36-7107e863a268';
 export const DEFAULT_GATEWAY_BASE_URL = 'http://127.0.0.1:8080';
-export const SUPPORTED_SAGA_MODES = Object.freeze(['stock', 'stock,dispatch']);
+export const SUPPORTED_SAGA_MODES = Object.freeze(['stock', 'stock,dispatch', 'stock,payment,dispatch']);
 const COMPOSE = ['compose', '-f', 'docker-compose.yml', '-f', 'docker-compose.p4.yml'];
 const HTTP_TIMEOUT_MS = 5_000;
 const CLI_TIMEOUT_MS = 20_000;
@@ -76,21 +77,21 @@ export function parseSagaSteps(raw) {
 
 export function resolveSmokeMode({ actual, expected } = {}) {
   const actualSteps = parseSagaSteps(actual);
-  if (actualSteps.split(',').includes('payment')) {
-    throw new Error('Saga con Pagos pendiente de integración P2; el smoke P4 no admite SAGA_STEPS con payment');
-  }
   if (!SUPPORTED_SAGA_MODES.includes(actualSteps)) {
-    throw new Error(`SAGA_STEPS no soportado en esta fase: ${actualSteps}`);
+    throw new Error(
+      `SAGA_STEPS no soportado en esta fase: ${actualSteps}; `
+      + 'se admiten stock, stock,dispatch o stock,payment,dispatch',
+    );
   }
 
   if (expected !== undefined && expected !== null && String(expected).trim() !== '') {
     const rawExpected = String(expected).trim();
     const expectedSteps = rawExpected === 'full' ? 'stock,payment,dispatch' : parseSagaSteps(rawExpected);
-    if (expectedSteps.split(',').includes('payment')) {
-      throw new Error('Saga con Pagos pendiente de integración P2; P4_SMOKE_EXPECT_STEPS no puede pedir full');
-    }
     if (!SUPPORTED_SAGA_MODES.includes(expectedSteps)) {
-      throw new Error(`P4_SMOKE_EXPECT_STEPS no soportado en esta fase: ${expectedSteps}`);
+      throw new Error(
+        `P4_SMOKE_EXPECT_STEPS no soportado en esta fase: ${expectedSteps}; `
+        + 'se admiten stock, stock,dispatch o stock,payment,dispatch',
+      );
     }
     if (expectedSteps !== actualSteps) {
       throw new Error(
@@ -255,6 +256,36 @@ function sameItems(actual, expected) {
   return JSON.stringify(normalize(actual)) === JSON.stringify(normalize(expected));
 }
 
+function assertExactKeys(value, keys, step, label) {
+  assert(isRecord(value), `${step}: ${label} is not an object`);
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  assert(
+    JSON.stringify(actual) === JSON.stringify(expected),
+    `${step}: ${label} keys changed (${actual.join(',')})`,
+  );
+}
+
+export function assertSummaryProjection(body, step = 'summary') {
+  assertExactKeys(body, ['orderId', 'partial', 'payment', 'dispatch'], step, 'summary');
+  if (body.payment?.availability === 'available') {
+    assertExactKeys(body.payment, ['availability', 'data'], step, 'payment');
+    assertExactKeys(body.payment.data, ['orderId', 'status'], step, 'payment.data');
+  } else {
+    assertExactKeys(body.payment, ['availability'], step, 'payment');
+  }
+  if (body.dispatch?.availability === 'available') {
+    assertExactKeys(body.dispatch, ['availability', 'data'], step, 'dispatch');
+    assertExactKeys(body.dispatch.data, ['orderId', 'status', 'items'], step, 'dispatch.data');
+    assert(Array.isArray(body.dispatch.data.items), `${step}: dispatch.items is not an array`);
+    for (const item of body.dispatch.data.items) {
+      assertExactKeys(item, ['partId', 'quantity'], step, 'dispatch.items[]');
+    }
+  } else {
+    assertExactKeys(body.dispatch, ['availability'], step, 'dispatch');
+  }
+}
+
 export function assertSummary(response, expected, step = 'summary') {
   assert(isRecord(response), `${step}: response missing`);
   assert(
@@ -263,6 +294,7 @@ export function assertSummary(response, expected, step = 'summary') {
   );
   const body = response.json;
   assert(isRecord(body), `${step}: response body is not an object`);
+  if (response.status === 200) assertSummaryProjection(body, step);
 
   if (expected.codes === undefined) {
     assert(body.code === undefined, `${step}: unexpected error code ${String(body.code)}`);
@@ -589,24 +621,11 @@ async function createOrder({
 }
 
 export function assertStockSummary(response, step) {
-  if (response.status === 503) {
-    assertSummary(response, {
-      statuses: [503],
-      codes: ['UPSTREAM_UNAVAILABLE'],
-      sources: { payment: 'unavailable', dispatch: 'not_found' },
-      forbidPaymentStatus: 'CHARGED',
-    }, step);
-    return;
-  }
-  if (response.status === 404) {
-    assertSummary(response, {
-      statuses: [404],
-      codes: ['SUMMARY_NOT_FOUND'],
-      forbidPaymentStatus: 'CHARGED',
-    }, step);
-    return;
-  }
-  throw new Error(`${step}: expected 503 or 404, got ${response.status}`);
+  assertSummary(response, {
+    statuses: [404],
+    codes: ['SUMMARY_NOT_FOUND'],
+    forbidPaymentStatus: 'CHARGED',
+  }, step);
 }
 
 export async function main() {
@@ -626,9 +645,11 @@ export async function main() {
   });
   console.log(`[ok] SAGA_STEPS real=${mode} (detected before mutations)`);
   if (mode === 'stock') {
-    console.log('[info] modo stock: sin Pagos ni Despacho; el resumen debe quedar sin fuentes');
+    console.log('[info] modo stock: sin cobro ni despacho; Pagos not_found y Despacho not_found');
+  } else if (mode === 'stock,dispatch') {
+    console.log('[info] modo stock,dispatch: sin cobro; Pagos not_found y Despacho real');
   } else {
-    console.log('[info] modo stock,dispatch: Saga de dos pasos; Pagos P2 no integrado, no se prueba cobro');
+    console.log('[info] modo stock,payment,dispatch: Pagos real con pasarela simulada y Despacho real');
   }
 
   const health = await waitForStatus('/health', 200, 'gateway health');
@@ -722,71 +743,7 @@ export async function main() {
   expectCode(changed, 'IDEMPOTENCY_KEY_CONFLICT', 'idempotency conflict');
   console.log('[ok] changed payload with same key -> 409 IDEMPOTENCY_KEY_CONFLICT');
 
-  if (mode === 'stock,dispatch') {
-    const summary = await http(`/web/v1/orders/${createdOrderId}/summary`, { token: readerToken });
-    assertSummary(summary, {
-      statuses: [200],
-      partial: true,
-      paymentAvailability: 'unavailable',
-      dispatchAvailability: 'available',
-      dispatchStatus: 'CREATED',
-      orderId: createdOrderId,
-      items: orderBody.items,
-      forbidPaymentStatus: 'CHARGED',
-    }, 'dispatch summary');
-
-    const summaryAgain = await http(`/web/v1/orders/${createdOrderId}/summary`, { token: readerToken });
-    assertSummary(summaryAgain, {
-      statuses: [200],
-      partial: true,
-      paymentAvailability: 'unavailable',
-      dispatchAvailability: 'available',
-      dispatchStatus: 'CREATED',
-      orderId: createdOrderId,
-      items: orderBody.items,
-      forbidPaymentStatus: 'CHARGED',
-    }, 'dispatch summary query');
-    assert(
-      JSON.stringify(summaryAgain.json) === JSON.stringify(summary.json),
-      'dispatch summary: repeated query changed',
-    );
-
-    const salesBeforeCancel = await http(`/v1/orders/${createdOrderId}`, { token: readerToken });
-    expectStatus(salesBeforeCancel, 200, 'sales order before cancel');
-    assert(salesBeforeCancel.json?.status === 'CONFIRMED', 'sales order before cancel: expected CONFIRMED');
-    console.log('[ok] dispatch summary 200 partial:true CREATED, same orderId/items, stable query');
-
-    const cancelFirst = await http(`/v1/orders/${createdOrderId}/cancel`, {
-      method: 'POST',
-      token: operatorToken,
-    });
-    expectStatus(cancelFirst, 200, 'first cancel');
-    assert(cancelFirst.json?.status === 'CANCELLED', 'first cancel: expected CANCELLED');
-
-    const cancelSecond = await http(`/v1/orders/${createdOrderId}/cancel`, {
-      method: 'POST',
-      token: operatorToken,
-    });
-    expectStatus(cancelSecond, 200, 'second cancel');
-    assert(cancelSecond.json?.status === 'CANCELLED', 'second cancel: expected CANCELLED');
-
-    const cancelledSummary = await http(`/web/v1/orders/${createdOrderId}/summary`, { token: readerToken });
-    assertSummary(cancelledSummary, {
-      statuses: [200],
-      partial: true,
-      paymentAvailability: 'unavailable',
-      dispatchAvailability: 'available',
-      dispatchStatus: 'CANCELLED',
-      orderId: createdOrderId,
-      items: orderBody.items,
-      forbidPaymentStatus: 'CHARGED',
-    }, 'cancelled dispatch summary');
-
-    const salesCancelled = await http(`/v1/orders/${createdOrderId}`, { token: readerToken });
-    expectStatus(salesCancelled, 200, 'sales order after cancel');
-    assert(salesCancelled.json?.status === 'CANCELLED', 'sales order after cancel: expected CANCELLED');
-    console.log('[ok] cancel twice -> Sales CANCELLED and dispatch CANCELLED in summary');
-  } else {
+  if (mode === 'stock') {
     const cancelFirst = await http(`/v1/orders/${createdOrderId}/cancel`, {
       method: 'POST',
       token: operatorToken,
@@ -815,6 +772,68 @@ export async function main() {
     const summary = await http(`/web/v1/orders/${summaryOrderId}/summary`, { token: readerToken });
     assertStockSummary(summary, 'summary stock');
     console.log(`[ok] summary stock -> ${summary.status} ${codeOf(summary)} without CHARGED`);
+  } else {
+    const full = mode === 'stock,payment,dispatch';
+    const paymentAvailability = full ? 'available' : 'not_found';
+    const partial = !full;
+    const beforeExpectation = {
+      statuses: [200],
+      partial,
+      paymentAvailability,
+      ...(full ? { paymentStatus: 'CHARGED' } : { forbidPaymentStatus: 'CHARGED' }),
+      dispatchAvailability: 'available',
+      dispatchStatus: 'CREATED',
+      orderId: createdOrderId,
+      items: orderBody.items,
+    };
+    const cancelledExpectation = {
+      ...beforeExpectation,
+      ...(full ? { paymentStatus: 'REFUNDED' } : {}),
+      dispatchStatus: 'CANCELLED',
+    };
+
+    const summary = await http(`/web/v1/orders/${createdOrderId}/summary`, { token: readerToken });
+    assertSummary(summary, beforeExpectation, `${mode} summary`);
+
+    const summaryAgain = await http(`/web/v1/orders/${createdOrderId}/summary`, { token: readerToken });
+    assertSummary(summaryAgain, beforeExpectation, `${mode} summary query`);
+    assert(
+      JSON.stringify(summaryAgain.json) === JSON.stringify(summary.json),
+      `${mode} summary: repeated query changed`,
+    );
+
+    const salesBeforeCancel = await http(`/v1/orders/${createdOrderId}`, { token: readerToken });
+    expectStatus(salesBeforeCancel, 200, 'sales order before cancel');
+    assert(salesBeforeCancel.json?.status === 'CONFIRMED', 'sales order before cancel: expected CONFIRMED');
+    console.log(
+      `[ok] ${mode} summary 200 partial:${partial} payment ${paymentAvailability}`
+      + `${full ? ' CHARGED' : ''} dispatch CREATED, same orderId/items, stable query`,
+    );
+
+    const cancelFirst = await http(`/v1/orders/${createdOrderId}/cancel`, {
+      method: 'POST',
+      token: operatorToken,
+    });
+    expectStatus(cancelFirst, 200, 'first cancel');
+    assert(cancelFirst.json?.status === 'CANCELLED', 'first cancel: expected CANCELLED');
+
+    const cancelSecond = await http(`/v1/orders/${createdOrderId}/cancel`, {
+      method: 'POST',
+      token: operatorToken,
+    });
+    expectStatus(cancelSecond, 200, 'second cancel');
+    assert(cancelSecond.json?.status === 'CANCELLED', 'second cancel: expected CANCELLED');
+
+    const cancelledSummary = await http(`/web/v1/orders/${createdOrderId}/summary`, { token: readerToken });
+    assertSummary(cancelledSummary, cancelledExpectation, `cancelled ${mode} summary`);
+
+    const salesCancelled = await http(`/v1/orders/${createdOrderId}`, { token: readerToken });
+    expectStatus(salesCancelled, 200, 'sales order after cancel');
+    assert(salesCancelled.json?.status === 'CANCELLED', 'sales order after cancel: expected CANCELLED');
+    console.log(
+      `[ok] cancel twice -> Sales CANCELLED, payment ${full ? 'REFUNDED' : 'not_found'}, `
+      + 'dispatch CANCELLED',
+    );
   }
 
   const rateConfig = resolveRateLimitConfig(
@@ -868,7 +887,7 @@ export async function main() {
     assertSummary(fixtureSummary, {
       statuses: [200],
       partial: true,
-      paymentAvailability: 'unavailable',
+      paymentAvailability: 'not_found',
       dispatchAvailability: 'available',
       dispatchStatus: 'CREATED',
       orderId: dispatchOrderId,
