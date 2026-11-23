@@ -1,12 +1,12 @@
 # P4 — Especificación de exposición: Gateway y BFF
 
-**Estado:** contrato de exposición implementado y validado de forma aislada. La Saga P3 está
-implementada en Sales; Pagos P2 sigue pendiente de integración y la Saga completa no está cerrada.
-Los códigos públicos v1.1 se tratan de forma transparente. **Línea base histórica:** `7daf5d0`
-(T1 + Despacho). **Snapshot de esta fase:** `main` `338681d`.
-**Alcance:** fijar el comportamiento observable del Gateway y del BFF. Este documento conserva las
-decisiones de la fase de especificación; la evidencia actual está en
-[VERIFICATION.md](VERIFICATION.md), §9, y la compatibilidad P3 se detalla en §16.
+**Estado:** CERRADO en modo overlay local (2026-11-23). Gateway y BFF conservan su runtime y se
+verificaron contra Pagos P2 **real** y la pasarela de pagos **simulada oficial**; la Saga P3 está
+integrada y la corrida full quedó verificada. No hay dinero real. **Línea base histórica:**
+`7daf5d0` (T1 + Despacho). **Base de esta fase:** `0edd96a` + cambios P4 locales.
+**Alcance:** fijar el comportamiento observable del Gateway y del BFF. Las secciones 2–11 son la
+especificación de transporte y rutas y no cambian; la evidencia actual está en
+[VERIFICATION.md](VERIFICATION.md), §10, y el cierre se detalla en §16.
 
 ## 1. Alcance y decisiones
 
@@ -14,8 +14,8 @@ P4 agrega una capa de exposición sin reemplazar la API pública de T1:
 
 - **T1:** `Cliente → Gateway → Sales API`. El Gateway autentica, autoriza, limita y reenvía.
 - **Resumen:** `Cliente → Gateway → BFF → Pagos / Despacho`. El BFF sólo consulta y agrega.
-- **T2-401 se adelanta, pero no se considera integrado final.** Pagos sigue siendo una propuesta
-  pendiente de P2 y la Saga/compensación pertenece a P3. El Gateway no cobra, no reserva stock y no
+- **T2-401 queda cerrado en modo overlay local.** Pagos P2 es un servicio real y la pasarela externa
+  es simulada; la Saga/compensación pertenece a P3. El Gateway no cobra, no reserva stock y no
   compensa; el BFF no crea ni cancela despachos.
 - **Sin persistencia duradera:** Gateway y BFF no tienen base de datos, Prisma, migraciones, Redis,
   broker, cola ni store compartido. La única excepción es el contador efímero del rate limit, por
@@ -25,10 +25,12 @@ P4 agrega una capa de exposición sin reemplazar la API pública de T1:
   de resumen son contratos nuevos de exposición P4, documentados aquí.
 - **Sin frontend, login, refresh tokens ni cuentas de usuario.** El JWT es una credencial de demo
   firmada localmente; no hay proveedor de identidad ni revocación más allá de `exp`.
-- **Sin circuit breaker, bulkhead ni retries automáticos.** Sólo deadlines explícitos y recuperación
-  basada en la idempotencia existente de T1.
-- **Sin mocks en runtime.** Las respuestas simuladas de Pagos viven únicamente en pruebas; el
-  adaptador de producción siempre habla HTTP con la fuente configurada.
+- **Sin circuit breaker, bulkhead ni retries automáticos en Gateway/BFF.** Las protecciones P2
+  (timeout, Circuit Breaker y Bulkhead) viven en Pagos y no se duplican en la capa de exposición.
+  Sólo deadlines explícitos y recuperación basada en la idempotencia existente de T1.
+- **Sin mocks de Pagos en runtime.** Pagos es el servicio P2 real; `payment-gateway-sim` es la
+  pasarela externa simulada oficial del tercero, no un mock de Pagos. Las fixtures de pruebas siguen
+  fuera del runtime.
 
 ## 2. Topología
 
@@ -41,7 +43,8 @@ Gateway :8080  (único puerto host del overlay P4)
       │                                      └── gRPC 800 ms ──► Inventory :50051
       └── /web/v1/orders/{orderId}/summary ──► BFF :3002
                                                  ├── GET /internal/v1/payments/{orderId}
-                                                 │      └── Pagos (P2, provisional)
+                                                 │      └── Pagos :3003 (real P2)
+                                                 │             └── pasarela simulada oficial
                                                  └── GET /internal/v1/dispatches/{orderId}
                                                         └── Despacho :3001 (real)
 ```
@@ -49,7 +52,8 @@ Gateway :8080  (único puerto host del overlay P4)
 - Sales conserva su `X-API-Key` v1 y sigue siendo la única autoridad de clientes y órdenes. Inventory
   conserva su gRPC y su deadline de 800 ms; el Gateway nunca lo llama directamente.
 - El BFF no llama a Sales: el resumen no afirma si la orden existe en Sales.
-- Pagos y Despacho conservan sus propias bases; el BFF no lee ni escribe bases ajenas.
+- Pagos y Despacho conservan sus propias bases; el BFF no lee ni escribe bases ajenas. La pasarela
+  simulada no tiene base y guarda su estado en memoria.
 - La red de Compose no es un límite de seguridad fuerte: la exposición se controla no publicando
   puertos host. `/internal` nunca se publica a través del Gateway.
 
@@ -289,10 +293,10 @@ URLs, mensajes ni excepciones de las fuentes. No se incluye `partial` en errores
 
 ## 10. Adaptadores de fuentes
 
-### 10.1 Pagos (provisional P2)
+### 10.1 Pagos (P2 real)
 
-- `GET {BFF_PAYMENTS_BASE_URL}/internal/v1/payments/{orderId}`. La ruta y los estados son una
-  **propuesta P2**, no un contrato congelado.
+- `GET {BFF_PAYMENTS_BASE_URL}/internal/v1/payments/{orderId}`. La ruta y los estados son el
+  contrato interno P2 implementado.
 - Estados aceptados: `CHARGED`, `DECLINED`, `REFUNDED`, `PENDING`, `REFUND_PENDING`. Cualquier otro,
   ausente o con tipo incorrecto hace que la fuente sea `unavailable`.
 - Se validan estrictamente `orderId` (debe coincidir) y `status`. Los campos adicionales se ignoran y
@@ -361,28 +365,31 @@ Reglas adicionales:
 
 ## 12. Empaquetado opt-in
 
-- El Compose raíz **permanece intacto**. Ya contiene T1 + Despacho y la Saga P3 en modo stock
-  (`SAGA_STEPS=stock`); P4 no lo modifica. La integración final a un único
-  `docker compose up --build` queda pendiente de coordinación con P2/P3.
+- El Compose raíz **no se modifica por P4** y ya contiene P1–P3: Sales, Inventory, Dispatch, Pagos
+  real, pasarela simulada y la Saga P3. Conserva `SAGA_STEPS=stock` por defecto. La integración final
+  en un único `docker compose up --build` y la CI del grupo quedan pendientes de coordinación.
 - El empaquetado P4 usa un overlay separado, `docker-compose.p4.yml`, de forma opt-in:
   `docker compose -f docker-compose.yml -f docker-compose.p4.yml up --build`.
-- En el overlay P4, **el único puerto host es `8080` del Gateway**. Sales, Inventory,
-  BFF, Despacho y Pagos (P2, fuera del runtime P4) quedan internos; el overlay retira los puertos
-  host que el Compose raíz publica para Sales/Inventory. No se agregan volúmenes ni bases nuevas.
+- En el overlay P4, **el único puerto host es el del Gateway** (`8080` por defecto, `8082` en la
+  corrida). Sales, Inventory, BFF, Despacho, Pagos y la pasarela simulada quedan internos; el overlay
+  retira los puertos host que el Compose raíz publica para Sales/Inventory y los de perfiles de
+  experimento/test. No se agregan volúmenes ni bases nuevas.
 - Gateway y BFF tienen healthchecks de liveness (`/health`) sin dependencias. Un upstream caído no
   impide arrancar ni que `/health` responda `200`.
-- Pagos no forma parte del runtime P4: el BFF apunta a su URL provisional y, si no está desplegado,
-  la fuente queda `unavailable`; no se incluye un mock de Pagos en Compose.
+- Pagos es el servicio real de P2 y `payment-gateway-sim` la pasarela externa simulada oficial. El
+  BFF apunta a `payments-api`; no hay mock de Pagos en Compose ni cobro real. Los 11 servicios del
+  stack full quedan healthy con sólo el Gateway publicado.
 
 ## 13. Matriz mínima de pruebas
 
-Criterios de aceptación; la evidencia real está en [VERIFICATION.md](VERIFICATION.md). Las pruebas
-unitarias y de integración usan stubs HTTP locales en `127.0.0.1:0` (puertos efímeros) y un reloj
-controlado para rate limit; no requieren Docker ni un Pagos real. En pruebas, Pagos se simula con
-fixtures; la integración real con Pagos queda pendiente de P2. El smoke P4 usa Sales real y
-Despacho real cuando el modo lo usa; no usa Pagos real. La fixture sintética de Despacho es opcional
-sólo en `stock` y no es evidencia de Saga. Cada escenario que llega al upstream verifica que recibió
-**una sola** llamada, para demostrar ausencia de retry.
+Criterios de aceptación; la evidencia real está en [VERIFICATION.md](VERIFICATION.md), §10. Las
+pruebas unitarias y de integración de Gateway/BFF usan stubs HTTP locales en `127.0.0.1:0` (puertos
+efímeros) y un reloj controlado para rate limit; no requieren Docker ni Pagos. En esas pruebas Pagos
+se simula con fixtures. La integración real se cubre en el runner P4 con el servicio Pagos real y la
+pasarela simulada oficial. El smoke P4 usa Sales, Inventory, Pagos y Despacho reales cuando el modo
+lo usa; la pasarela externa es simulada. La fixture sintética de Despacho es opcional sólo en `stock`
+y no es evidencia de Saga. Cada escenario que llega al upstream verifica que recibió **una sola**
+llamada, para demostrar ausencia de retry.
 
 ### 13.1 Gateway: autenticación y autorización
 
@@ -448,7 +455,7 @@ sólo en `stock` y no es evidencia de Saga. Cada escenario que llega al upstream
 | B11 | Pagos `404` con Despacho disponible | `200 partial:true`; pago `not_found` sin `data`; nunca se convierte en `CHARGED`. |
 | B12 | `X-Trace-Id` válido/inválido hacia Despacho | Se propaga el UUID validado; si falta o es inválido, el BFF genera uno. |
 | B13 | `/health` del BFF con fuentes caídas | `200` sin consultar Pagos/Despacho. |
-| B14 | Runtime sin Pagos real | La fuente queda `unavailable`; no existe mock runtime ni éxito simulado. |
+| B14 | Runtime sin Pagos desplegado | La fuente queda `unavailable`; no existe mock de Pagos en runtime ni éxito simulado. |
 
 ### 13.5 Configuración, trazas, salud y empaquetado
 
@@ -477,62 +484,67 @@ Gateway, BFF, Pagos ni Saga**:
 La verificación P4 previa (Gateway, BFF, overlay y smoke sobre `7daf5d0`) está en
 [VERIFICATION.md](VERIFICATION.md). Pagos y Saga no se verificaron allí.
 
-La evidencia actual del snapshot `main` `338681d` + delta P4 sin commit está en
-[VERIFICATION.md](VERIFICATION.md), §9. Incluye la corrida real del runner con `stock`,
-`stock,dispatch` y `DISPATCH_FAIL_CREATE=true`, sin Pagos. La línea base `7daf5d0` de arriba se
-conserva como histórica.
+La evidencia actual de la base `0edd96a` + delta P4 sin commit está en
+[VERIFICATION.md](VERIFICATION.md), §10. Incluye la corrida full con Pagos real y pasarela simulada,
+el fallo de Despacho con compensación y E3. La corrida previa sin Pagos de §9 se conserva como
+histórica; la línea base `7daf5d0` de arriba también.
 
-## 15. Pendientes de coordinación
+## 15. Cierre y pendientes de coordinación
 
-La exposición P4 está implementada; la evidencia actual está en
-[VERIFICATION.md](VERIFICATION.md), §9. Sigue pendiente:
+P4 queda cerrado en modo overlay local. La evidencia está en [VERIFICATION.md](VERIFICATION.md),
+§10. No hay que rehacer las protecciones P2 ni la Saga P3: ambas se verificaron en la corrida full y
+en E3. Queda pendiente de coordinación con el grupo:
 
-- Integración real de Pagos (P2) con la Saga implementada en P3.
-- Validación de la Saga completa con Pagos real y coordinación de `SAGA_STEPS`/smoke.
-- Integración final en un único `docker compose up --build`.
-- TLS/ingress, frontend, login/refresh, CORS y rate limit compartido entre instancias.
-- Evidencia de sistema con Pagos real y la Saga completa.
+- Integrar el overlay en el Compose raíz y en la CI, con una decisión explícita sobre el
+  `SAGA_STEPS` por defecto.
+- Publicar o grabar la demo si el equipo decide convertir el guion en video.
 
-**T2-401 no se declara integrado final por esta especificación.** Es un contrato de exposición
-adelantado, verificable de forma aislada, que espera la integración coordinada con P2/P3.
+Fuera de alcance de P4: TLS/ingress, frontend, login/refresh, CORS, rate limit compartido entre
+instancias y cualquier evidencia de producción, capacidad o SLO.
 
-## 16. Fase P3: compatibilidad de exposición (modos implementados)
+**T2-401 queda cerrado en modo overlay local**, no así la integración final en el Compose raíz ni la
+CI del grupo.
 
-La Saga P3 vive en `apps/sales-api/src/saga`; Pagos P2 no existe todavía en `apps/`. El contrato
-público v1.1 agrega `422 PAYMENT_DECLINED`, `503 PAYMENT_UNAVAILABLE`/`DISPATCH_UNAVAILABLE` y
-`504 PAYMENT_TIMEOUT`/`DISPATCH_TIMEOUT`. P4 no implementa la Saga ni compensa: el Gateway
-preserva esos errores y el BFF sólo consulta los estados de Pagos.
+## 16. Cierre P4: Pagos real, pasarela simulada y DOC-01
 
-Modos implementados y verificados en esta fase:
+**DOC-01 (Muse) — obligatorio:** esta sección es la fuente de cierre documental de P4. Las
+menciones anteriores de este documento que describían Pagos como pendiente o ausente quedaron
+actualizadas; las secciones 2–11 conservan la especificación de transporte y rutas sin cambios.
 
-- `tests/t2/p4-smoke.mjs` detecta el `SAGA_STEPS` real de `sales-api` antes de mutar y acepta sólo
-  `stock` y `stock,dispatch`. Un `P4_SMOKE_EXPECT_STEPS` explícito se valida contra el valor real;
-  un modo con `payment` o `full` termina con «pendiente de integración P2» y no simula éxito. Los
-  comandos Compose respetan `COMPOSE_PROJECT_NAME` y `COMPOSE_ENV_FILES`.
-- `stock` conserva las aserciones anteriores del resumen sin Pagos/Despacho. `stock,dispatch`
-  crea la venta por Gateway, exige resumen `200 partial:true` con pago `unavailable` y despacho
-  `CREATED` con el mismo `orderId`/items, replay estable y cancelación doble que deja Sales y el
-  despacho en `CANCELLED`. Reader GET/POST, JWT y rate limit siguen siendo reales.
-- `tests/t2/p4-independent.mjs` usa un proyecto aislado `repuestossur-p4-*` (por defecto
-  `repuestossur-p4-independent`) y un puerto propio (8081 por defecto). Preflight de labels,
-  archivos Compose y servicios; un puerto ocupado falla sin matar procesos. `--no-build` reutiliza
-  las imágenes construidas. Ejecuta los tres escenarios secuenciales, mide el stock con un
-  `GetPart` de sólo lectura y restaura `DISPATCH_FAIL_CREATE=false` y el `SAGA_STEPS` inicial (o
-  `stock,dispatch`) en `finally`; si la restauración falla, termina distinto de cero. No usa
-  `down`, no borra volúmenes, no agrega Pagos ni mocks de runtime.
-- `docker-compose.p4.yml` publica el Gateway en
-  `127.0.0.1:${P4_GATEWAY_PUBLISHED_PORT:-8080}:8080`; el runner fija ese puerto al suyo. El
-  Compose raíz conserva `SAGA_STEPS=stock`.
-- La cobertura de Gateway, BFF y agregación del bloque anterior se conserva; no se duplicó.
+La corrida final (2026-11-23) usó el proyecto `repuestossur-p4-final`, puerto `8082`, 11 servicios
+healthy y sólo `127.0.0.1:8082` publicado. Pagos es el servicio real de P2; `payment-gateway-sim` es
+la pasarela externa simulada oficial. No hay dinero real.
 
-Resultados verificados en [VERIFICATION.md](VERIFICATION.md), §9: la corrida real del runner terminó
-`exit 0`; `stock` y `stock,dispatch` dejaron el stock `5 → 5`, sin fixture sintética; el fallo de
-Despacho devolvió `503 DISPATCH_UNAVAILABLE`, replay con el mismo código/mensaje, cero órdenes
-públicas y stock `5 → 5 → 5`; la restauración quedó verificada con
-`SAGA_STEPS=stock,dispatch` y `DISPATCH_FAIL_CREATE=false`. No hay Pagos reales, cobro, reembolso,
-Circuit Breaker/Bulkhead ni Saga de tres pasos. La compensación observada es sólo de stock y no
-prueba atomicidad de P1.
+Tres modos y cuatro escenarios verificados:
 
-Límites: Pagos P2 y la Saga de tres pasos siguen pendientes; el fallo de Despacho sólo verifica la
-compensación de stock sin cobro. `GetPart` es una sonda de observabilidad, no una prueba de
-atomicidad de P1 ni un endpoint nuevo. La evidencia de `7daf5d0` se conserva como histórica.
+- `stock`: resumen `404 SUMMARY_NOT_FOUND` con Pagos y Despacho `not_found`; stock `5 → 5`.
+- `stock,dispatch`: resumen `200 partial:true`, Pagos `not_found`, Despacho `CREATED`; cancelación
+  `CANCELLED`; stock `5 → 5`.
+- `stock,payment,dispatch`: creación `201 CONFIRMED`, replay `201` con el mismo cuerpo, conflicto
+  `409`; resumen `200 partial:false` con Pagos `CHARGED` y Despacho `CREATED`, misma orden/items y
+  sin campos extra de Pagos; doble cancelación deja Pagos `REFUNDED` y Despacho `CANCELLED`; stock
+  `5 → 5`; deltas de la pasarela `+1` cobros, `+1` reembolsos, `0` anulaciones.
+- `DISPATCH_FAIL_CREATE=true` con full: `503 DISPATCH_UNAVAILABLE`; el replay con la misma
+  `Idempotency-Key` devuelve el mismo código/mensaje; cero órdenes públicas; `GET /v1/customers`
+  `200`; stock `5 → 5 → 5`; delta del primer fallo `1/1/0` y del replay `0/0/0`.
+
+E3 comparó Bulkhead y Circuit Breaker de Pagos con 3 repeticiones por brazo, warmup de una venta
+normal por repetición y deadline fijo de `1200 ms`. Bulkhead: simulador `slow` con `650 ms`, cap
+experimental `2`, ráfaga de 6 ventas y GET de clientes en paralelo; protegido `6×201/12×503`, pico
+`2` y 4 rechazos por repetición; sin protección `18×201` y 0 rechazos. Circuit Breaker: simulador
+`down`, 8 POST secuenciales por repetición y GET de clientes en paralelo; protegido y sin protección
+`24×503`, pero con protección el simulador recibió `3/8` por repetición y el circuito abrió una vez;
+sin protección recibió `8/8` y no hubo aperturas. La corrida total fue 84 POST de negocio y 54 GET
+de clientes, con 0 rate limit. Los percentiles están en [VERIFICATION.md](VERIFICATION.md), §10; no
+son un SLO ni una prueba de capacidad.
+
+Restauración: simulador `normal`, latencia `20 ms`, `slowDelayMs=3000`; Pagos con CB/BH `true`, cap
+`8`, timeout `1200`; stock `200 → 200` y `5 → 5`; 36 cancelaciones verificadas, incluidas 12 de
+warmup, con cero pendientes o inciertas. No se reinició el simulador, no se borraron volúmenes y no
+se detuvieron otros proyectos.
+
+Límites: muestras pequeñas; las latencias POST mezclan `201` y `503`; no se observó `HALF_OPEN` bajo
+carga medida más allá de la restauración; las 18 corridas directas de P2 son externas a E3 y se
+documentan en [experiments/payments](../../experiments/payments/README.md), sin duplicar sus cifras
+como evidencia P4. No se ejecutó CI de GitHub ni una auditoría npm nueva. La integración en el
+Compose raíz y la CI del grupo siguen siendo responsabilidad de coordinación.

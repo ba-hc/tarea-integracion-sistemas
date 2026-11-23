@@ -1,13 +1,13 @@
 # Verificación P4 — Gateway y BFF
 
-**Estado actual (2026-11-22):** Gateway, BFF y los modos `stock`/`stock,dispatch` verificados con
-una corrida real del runner. Pagos P2 sigue ausente; no hay cobro, reembolso, Circuit Breaker ni
-Bulkhead reales, y la Saga completa no está cerrada. La evidencia vigente está en §9.
+**Estado actual (2026-11-23):** P4 cerrado en modo overlay local. Gateway y BFF se verificaron
+contra Pagos P2 **real** y la pasarela de pagos **simulada oficial**, con la Saga full. La evidencia
+vigente está en §10.
 
-**Leyenda histórica:** Las secciones 1–8 documentan el hito `7daf5d0` y conservan sus números y
-resultados. No describen el estado actual. Las menciones a P3/Saga como pendientes en ese hito son
-históricas: P3 está implementada en Sales, pero Pagos P2 no existe. Este documento no certifica
-seguridad de producción ni una regresión completa de CI.
+**Leyenda histórica:** Las secciones 1–9 conservan sus hitos y cifras. §1–8 documentan `7daf5d0`;
+§9 documenta la corrida previa sin Pagos. Las menciones a Pagos ausente o a la Saga pendiente en
+esas secciones son históricas. Este documento no certifica seguridad de producción, capacidad, SLO
+ni una regresión completa de CI.
 
 ## 1. Línea base
 
@@ -106,11 +106,11 @@ deuda de auditoría. No se afirma que las vulnerabilidades estén resueltas.
 
 ## 7. Límites y pendientes
 
-Estado del hito histórico; ver §9 para el estado actual.
+Estado del hito histórico; ver §10 para el estado actual.
 
 - JWT de demo, sin proveedor de identidad ni revocación.
 - Rate limit en memoria y monoinstancia.
-- Pagos sigue siendo una propuesta P2; no hay integración real.
+- En este hito, Pagos seguía siendo una propuesta P2; no había integración real.
 - Saga, compensaciones y presupuesto de recuperación pertenecen a P3.
 - La integración final en un único Compose raíz sigue pendiente.
 - No hay evidencia de Saga, fallas P2/P3 ni certificación de seguridad de producción.
@@ -118,7 +118,7 @@ Estado del hito histórico; ver §9 para el estado actual.
 
 ## 8. Reproducción
 
-Comandos del hito histórico; la reproducción actual está en §9.
+Comandos del hito histórico; la reproducción actual está en §10.
 
 ```bash
 # Pruebas por servicio
@@ -138,7 +138,7 @@ COMPOSE_ENV_FILES=.env.p4 P4_SMOKE_DISPATCH_FIXTURE=true node tests/t2/p4-smoke.
 La variante de exportar `GATEWAY_JWT_SECRET` en la terminal sigue siendo válida; no se exige un
 archivo. No se publican secretos, tokens, IDs de objetos ni cuerpos crudos en este documento.
 
-## 9. Evidencia actual — 2026-11-22
+## 9. Evidencia previa — 2026-11-22
 
 ### 9.1 Entorno y snapshot
 
@@ -191,7 +191,7 @@ La compensación observada es la de stock en el fallo de Despacho, sin Pagos: no
 reembolso, Circuit Breaker, Bulkhead ni la Saga de tres pasos. No es una demostración completa ni una
 prueba de atomicidad.
 
-### 9.4 Pruebas automatizadas actuales
+### 9.4 Pruebas automatizadas del hito
 
 | Suite | Resultado |
 |---|---|
@@ -213,5 +213,128 @@ Un primer intento del CLI falló en el preflight por un timeout pasado como obje
 contenedores. Se corrigió la firma, se añadió una regresión y la reauditoría posterior pasó. La
 corrida reportada en §9.2 es la posterior a esa corrección.
 
-La corrida actual no registra tasas, latencias, `Retry-After` ni resultados de E1–E3; no se
+La corrida de este hito no registra tasas, latencias, `Retry-After` ni resultados de E1–E3; no se
 infieren ni se fabrican.
+
+## 10. Evidencia actual — 2026-11-23
+
+### 10.1 Entorno y snapshot
+
+- Fecha: 2026-11-23 (local/UTC).
+- Linux x86_64, kernel `6.12.111+deb13-amd64`; 12 CPUs disponibles.
+- Docker `29.9.0`; Docker Compose `5.6.0`; Node.js `24.21.0`.
+- Base Git `0edd96a` + cambios P4 locales, sin commit.
+- Proyecto `repuestossur-p4-final`, puerto loopback `8082`, 11 servicios healthy.
+- Siete imágenes construidas para ese mismo proyecto: Sales, Inventory, Dispatch, Pagos, pasarela
+  simulada, Gateway y BFF. Gateway y BFF no cambiaron su runtime en esta entrega; el trabajo es de
+  verificación y documentación.
+- Sólo `127.0.0.1:8082` publicado. Pagos, pasarela, BFF, Sales, Inventory, Dispatch y bases quedan
+  internos; tampoco se publican puertos de administración ni de bases de prueba.
+- `.env.p4` local, ignorado por Git y con permisos restrictivos; valores no incluidos.
+
+### 10.2 Comandos y resultado
+
+Desde la raíz, con las imágenes ya construidas para ese proyecto:
+
+```bash
+P4_TEST_PROJECT=repuestossur-p4-final \
+P4_TEST_PORT=8082 \
+node tests/t2/p4-independent.mjs --no-build
+```
+
+Resultado: exit `0`; JSON final `status: passed`, `pagos: real-service+simulated-gateway`.
+
+```bash
+P4_TEST_PROJECT=repuestossur-p4-final \
+P4_TEST_PORT=8082 \
+node tests/t2/p4-continuity.mjs
+```
+
+Resultado: exit `0`; JSON final `status: passed`. La continuidad se ejecutó en el mismo proyecto y
+puerto, con simulador en `normal` y flags por defecto, de forma exclusiva y serial.
+
+No se usó fixture sintética de Despacho en ninguno de los cuatro modos. El runner usa los servicios
+reales del stack; en full, Pagos y Despacho son reales y la pasarela externa es la simulada oficial.
+Las suites unitarias y de agregación usan dobles locales y no se presentan como integración real.
+
+### 10.3 Escenarios
+
+| Modo | Resultado |
+|---|---|
+| `stock` | Smoke PASS. Resumen `404 SUMMARY_NOT_FOUND` con Pagos y Despacho `not_found`. `GetPart` `5 → 5`. |
+| `stock,dispatch` | Smoke PASS. Resumen `200 partial:true`, Pagos `not_found`, Despacho `CREATED`; tras cancelar, Despacho `CANCELLED`. `GetPart` `5 → 5`. |
+| `stock,payment,dispatch` | Creación `201 CONFIRMED`; replay `201` con el mismo payload/cuerpo; misma key con payload distinto `409`. Resumen `200 partial:false` con Pagos `CHARGED` y Despacho `CREATED`, misma orden/items y sin extras de Pagos. Doble cancelación deja Pagos `REFUNDED` y Despacho `CANCELLED`. `GetPart` `5 → 5`. Deltas de la pasarela: `+1` cobros, `+1` reembolsos, `0` anulaciones. |
+| Full con `DISPATCH_FAIL_CREATE=true` | `503 DISPATCH_UNAVAILABLE`; el replay con la misma `Idempotency-Key` devuelve el mismo código y mensaje. Cero órdenes públicas; `GET /v1/customers` `200`. `GetPart` antes/tras primer fallo/tras replay: `5 → 5 → 5`. Deltas del primer fallo: `1/1/0`; del replay: `0/0/0`. |
+
+Restauración observada: `SAGA_STEPS=stock,payment,dispatch` y `DISPATCH_FAIL_CREATE=false`,
+verificados. La compensación del fallo de Despacho incluye reembolso en Pagos y liberación de stock;
+no se expone una orden pública. La pasarela simulada guarda estado en memoria y no hay dinero real.
+
+### 10.4 Continuidad E3
+
+Cuatro brazos × tres repeticiones (12 ejecuciones). Cada repetición recrea sólo `payments-api` para
+limpiar contadores y aplica flags/timeout antes del warmup de una venta normal y su cancelación;
+después mide. El deadline de Pagos es `1200 ms` fijo; la demora confirmable del simulador es
+`650 ms`. Bulkhead usa cap experimental `2`, ráfaga de 6 ventas simultáneas y Circuit Breaker
+apagado. Circuit Breaker usa simulador `down`, 8 POST secuenciales y Bulkhead apagado. En ambos
+brazos se programa un `GET /v1/customers` en paralelo a la ráfaga o a los POST.
+
+| Brazo | Protección | n POST | Estados POST | p50/p95/p99 POST (ms) | n GET | Estados GET | p50/p95/p99 GET (ms) |
+|---|---|---:|---|---|---:|---|---|
+| Bulkhead | activo | 18 | `6×201`, `12×503 PAYMENT_UNAVAILABLE` | 285.2 / 862.4 / 862.4 | 3 | `3×200` | 10.8 / 17.9 / 17.9 |
+| Bulkhead | apagado | 18 | `18×201` | 786.5 / 800.7 / 800.7 | 3 | `3×200` | 21 / 24.9 / 24.9 |
+| Circuit Breaker | activo | 24 | `24×503 PAYMENT_UNAVAILABLE` | 51.9 / 100.7 / 101.5 | 24 | `24×200` | 5.3 / 7.0 / 17.2 |
+| Circuit Breaker | apagado | 24 | `24×503 PAYMENT_UNAVAILABLE` | 79.3 / 108.8 / 123.5 | 24 | `24×200` | 5.1 / 7.5 / 8.6 |
+
+Mecanismo observado:
+
+- Bulkhead activo: `peakInFlight=2` y 4 rechazos por repetición; apagado: 0 rechazos y todas las
+  ventas `201`.
+- Circuit Breaker activo: el simulador recibió `3/8` llamadas por repetición, el circuito abrió una
+  vez y rechazó 5 llamadas por repetición. Apagado: `8/8` llamadas, 0 aperturas y 0 rechazos.
+- Totales medidos por Gateway: 84 POST con cuerpo de negocio y 54 GET de clientes, todos los GET
+  `200`; 0 respuestas `429` de rate limit.
+- En los brazos de Circuit Breaker, el warmup de venta y cancelación añade dos llamadas exitosas al
+  historial antes de medir. Eso explica que el circuito abra después de tres fallas sin alterar el
+  mínimo configurado.
+- Las latencias POST mezclan `201` y `503`; no se usan para afirmar que se aceleran cobros ni que una
+  caída vende. Las muestras son pequeñas y no son SLO, capacidad ni benchmark.
+- No se observó `HALF_OPEN` ni recuperación bajo carga medida más allá de la restauración.
+
+### 10.5 Restauración y limpieza
+
+| Elemento | Estado final |
+|---|---|
+| Simulador | `normal`, `latencyMs=20`, `slowDelayMs=3000` |
+| Pagos | Circuit Breaker `true`, Bulkhead `true`, cap `8`, timeout `1200 ms` |
+| Stock | Pieza de ráfaga `200 → 200`; pieza semilla `5 → 5`; verificado |
+| Limpieza | 36 cancelaciones verificadas, incluidas 12 de warmup; 0 pendientes; 0 inciertas |
+
+`restore.ok: true`. No se reinició el simulador, no se borraron volúmenes, no se detuvieron otros
+proyectos y se conservaron red, volúmenes y registros de prueba. El runner puede repetir con la
+misma `Idempotency-Key` bajo modo normal si una respuesta HTTP queda incierta, pero en esta corrida
+no hubo respuestas inciertas ni recuperaciones: no se ejecutó el camino real de retry.
+
+### 10.6 Pruebas automatizadas
+
+| Suite | Resultado |
+|---|---|
+| Gateway (`npm test`) | 109 pruebas / 7 archivos |
+| BFF (`npm test`) | 102 pruebas / 6 archivos |
+| Nativas (`node --test`) | 76/76: smoke 29 + independent 29 + aggregation 6 + continuity 12 |
+| **Total** | **287** |
+
+`npm run typecheck` y `npm run build` pasaron en Gateway y BFF. No se ejecutó CI de GitHub y no se
+hizo una auditoría npm nueva; la alerta histórica de §6 se conserva y no se presenta como resuelta.
+Las 18 corridas directas de P2 son externas a E3 y se documentan en
+[experiments/payments](../../experiments/payments/README.md); no se duplican sus cifras como
+evidencia P4 ni se publican resultados de otro componente como propios.
+
+### 10.7 Límites
+
+- La corrida E3 es de mecanismo: 12 ejecuciones pequeñas, sin SLO, capacidad ni benchmark de Pagos.
+- Las latencias POST agregan respuestas exitosas y rechazos; no miden sólo cobros aprobados.
+- No se probó `HALF_OPEN` ni recuperación sostenida bajo carga medida.
+- `GetPart` es una sonda de observabilidad; no prueba atomicidad de P1 ni orden temporal de efectos.
+- No se ejecutó SQL desde P4, no se leyeron bases ajenas y no se alteró el Compose raíz.
+- La integración final en el Compose raíz y la CI del grupo siguen pendientes de coordinación.

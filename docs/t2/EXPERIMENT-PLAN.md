@@ -1,111 +1,122 @@
-# T2-402/403 — plan de experimento
+# T2-402/403 — experimento observado
 
-**Estado:** smoke parcial ejecutado; E1–E3 no ejecutados. P3 existe en Sales y publica el control
-`DISPATCH_FAIL_CREATE=true`. Pagos P2 no existe, así que no hay Circuit Breaker, Bulkhead ni toggles
-P2. La evidencia del smoke parcial está en [VERIFICATION.md](VERIFICATION.md), §9; no es evidencia
-de E1–E3.
+**Estado (2026-11-23):** E1 full, E2 full con fallo de Despacho y E3 de continuidad ejecutados en
+`repuestossur-p4-final`, puerto `8082`. Las cifras, comandos y límites están en
+[VERIFICATION.md](VERIFICATION.md), §10. Este documento describe el diseño observado; no es un
+benchmark de Pagos ni un SLO.
 
-## Lo ya ejecutado: smoke parcial
+## Qué se ejecutó
 
-La corrida real del runner cubrió `stock`, `stock,dispatch` y `DISPATCH_FAIL_CREATE=true` sin Pagos.
-Dejó `GetPart` `5 → 5` en los dos primeros modos y `5 → 5 → 5` antes/tras el primer 503/tras el
-replay en el tercero. El fallo de Despacho devolvió `503 DISPATCH_UNAVAILABLE`, replay con el mismo
-código/mensaje, cero órdenes públicas y `GET /v1/customers` `200`. No usó fixture sintética.
+- **E1 — éxito completo:** flujo normal `stock,payment,dispatch` con creación `201 CONFIRMED`,
+  replay idempotente, resumen `200 partial:false` y doble cancelación con reembolso.
+- **E2 — fallo en el último paso:** full con `DISPATCH_FAIL_CREATE=true`; `503
+  DISPATCH_UNAVAILABLE`, replay con el mismo código/mensaje, cero órdenes públicas y compensación de
+  Pagos y stock.
+- **E3 — continuidad:** cuatro brazos × tres repeticiones. Bulkhead protegido/sin protección con
+  simulador `slow`; Circuit Breaker protegido/sin protección con simulador `down`. Cada brazo midió
+  POST de negocio y `GET /v1/customers` en paralelo.
 
-Ese smoke no mide latencia, tasas, Circuit Breaker, Bulkhead, reembolso ni la Saga de tres pasos. No
-se presentan sus resultados como E1–E3.
+No se ejecutó un A/B “normal sin protecciones” de P4: E1 sólo cubre el camino normal. E2 no desactiva
+la Saga; usa el control de fallo de Despacho publicado por P3. Las 18 corridas directas de P2 son
+externas a E3 y se citan con atribución en
+[experiments/payments](../../experiments/payments/README.md).
 
-## Hipótesis y controles
+## Hipótesis y lectura
 
-- **H1 — protección de fallas:** con Circuit Breaker y Bulkhead de P2, una dependencia lenta o
-  caída debe acotar latencia y rechazos sin tumbar la continuidad de `GET /v1/customers`.
-- **H2 — compensación:** si el último paso confirmado falla (Despacho), la Saga de P3 debe
-  compensar en orden inverso los pasos anteriores. El control es el mismo flujo con éxito.
-- **H3 — pico de Pagos:** una fuente Pagos lenta o caída debe activar las protecciones acordadas
-  en P2 sin que el rate limit del Gateway oculte el Circuit Breaker o el Bulkhead.
-
-P3 ya publica `DISPATCH_FAIL_CREATE=true`; no se inventan toggles de P2. E2 no compara un brazo “sin
-compensación”: no se desactivan invariantes de la Saga. La comparación con y sin protecciones se
-limita a E1/E3, en un entorno P2 aislado y coordinado.
+- **H1 — protección de fallas:** con Circuit Breaker y Bulkhead de P2, una pasarela lenta o caída
+  debe producir rechazos explícitos y mantener la continuidad de `GET /v1/customers`. Se observó el
+  mecanismo; no se fijó un umbral de latencia ni se demuestra un SLO.
+- **H2 — compensación:** si falla Despacho, la Saga debe reembolsar el cobro y liberar el stock sin
+  exponer una orden pública. Se observó en E2; no se probó atomicidad de P1 ni orden temporal de
+  efectos.
+- **H3 — pico de Pagos:** una fuente lenta o caída debe activar las protecciones P2 sin que el rate
+  limit del Gateway oculte el fenómeno. Se observó con 0 respuestas `429`; la muestra es pequeña y no
+  es capacidad.
 
 ## Escenarios
 
-| ID | Escenario | Brazo A | Brazo B | Qué debe observarse |
-|---|---|---|---|---|
-| E1 | Éxito completo | Flujo normal | Flujo normal con protecciones P2 | Estado final confirmado y mismos efectos de negocio. |
-| E2 | Falla en el último paso (Despacho) | Camino normal, sin falla | `DISPATCH_FAIL_CREATE=true` con compensación P3 activa | El stock y los pasos previos quedan en el estado acordado; no se duplican efectos. |
-| E3 | Pagos lento o caído en pico | Sin protección | Circuit Breaker/Bulkhead P2 en entorno aislado y coordinado | Latencia acotada, rechazos explícitos, continuidad de lecturas y recuperación. |
+| ID | Escenario | Brazo | Evidencia |
+|---|---|---|---|
+| E1 | Éxito completo | Full normal, sin falla | §10.3: creación, replay, resumen y cancelación |
+| E2 | Falla en Despacho | Full con `DISPATCH_FAIL_CREATE=true`, Saga activa | §10.3: `503`, replay estable, cero órdenes, compensación |
+| E3 | Pasarela lenta o caída | Bulkhead y Circuit Breaker, protegido vs. apagado | §10.4: estados, rechazos, `n` y percentiles |
 
-E1–E3 requieren Pagos P2 real y coordinación entre P2/P3/P4. No se ejecutan desde P4. E2 usa el
-control publicado por P3, pero el flujo completo con cobro sigue dependiendo de P2. No se mutan
-módulos de la Saga ni volúmenes compartidos desde P4.
+Los brazos de planificación que no se ejecutaron no se presentan como evidencia. E3 no compara la
+Saga ni Despacho: sólo las protecciones de Pagos.
 
-## Entradas que debe entregar P2
+## Controles usados
 
-Antes de ejecutar E1–E3, P2 debe acordar y entregar:
+- La pasarela simulada se configura en caliente con `GET/PUT /admin/config` mediante `docker compose
+  exec` dentro de `payment-gateway-sim`. No se publica un puerto de administración.
+- El estado de Pagos se lee con `GET /internal/v1/resilience` mediante `docker compose exec` dentro
+  de `payments-api`.
+- Flags de los brazos: `PAYMENTS_CIRCUIT_BREAKER_ENABLED`, `PAYMENTS_BULKHEAD_ENABLED`,
+  `PAYMENTS_BULKHEAD_MAX_CONCURRENT` y `PAYMENTS_GATEWAY_TIMEOUT_MS`. El timeout se fija en `1200 ms`
+  en ambos brazos.
+- No se inventaron toggles de P2/P3, no se ejecutó SQL, no se leyeron bases ajenas y no se usó el
+  rate limit para eludir ni sustituir las protecciones.
 
-- Contrato interno, URL, health y versión desplegable de Pagos.
-- Controles de falla y comparación disponibles: rechazo, timeout, lentitud, caída y recuperación,
-  con el nombre exacto de cada control.
-- Métricas y atribución de Circuit Breaker/Bulkhead, estados y ventanas de medición.
-- Comportamiento de recuperación y criterio para distinguir rechazo confirmado de resultado en duda.
-- Presupuesto de timeouts de Pagos y su relación con el deadline de Sales y el rate limit del
-  Gateway.
+## Protocolo ejecutado
 
-Si P2 no entrega un control o una señal, el brazo correspondiente no se ejecuta. No se sustituye por
-un toggle inventado ni por un mock runtime.
+- Tres repeticiones por brazo; warmup de una venta normal y su cancelación por repetición.
+- `payments-api` se recreó antes de cada repetición para limpiar contadores y fijar flags/timeout. No
+  se reinició el simulador.
+- Bulkhead: simulador `slow` con `650 ms`, cap experimental `2`, ráfaga de 6 ventas simultáneas y
+  Circuit Breaker apagado.
+- Circuit Breaker: simulador `down`, 8 POST secuenciales y Bulkhead apagado.
+- `GET /v1/customers` se programó en paralelo a la ráfaga o a los POST.
+- La corrida fue exclusiva y serial en `repuestossur-p4-final`; no se mezcló con smoke, carga ni otro
+  proyecto.
+- Se midieron 84 POST con cuerpo de negocio y 54 GET de clientes, con 0 respuestas `429`.
+- La latencia es HTTP del host alrededor de cada solicitud; se reportan p50/p95/p99, `n` y conteos
+  por ruta y brazo. No se usó un umbral duro ni se movió después de ver resultados.
 
-## Protocolo práctico
+## Datos y JSON
 
-- Preflight de stock y de los controles de falla antes de cada serie.
-- Misma tasa, concurrencia, datos y semilla entre brazos; registrar duración y warmup.
-- Al menos tres iteraciones por brazo, sin mezclar E1, E2 y E3 en la misma serie.
-- Medir rutas por separado: creación/cancelación, resumen, Pagos y lecturas de clientes.
-- Reportar p50, p95, p99, `n` y tasa de error por ruta y brazo.
-- Leer `GET /v1/customers` mientras falla Pagos/Despacho para comprobar continuidad.
-- Distinguir un `429` del rate limit del Gateway de un fallback o rechazo de Pagos. Si el brazo no
-  mide el fenómeno por rate limit, fallback o error de instrumentación, se invalida y se repite.
-- Acordar thresholds/SLO antes de ejecutar; no moverlos después de ver resultados.
-- No fabricar métricas, cargas ni respuestas. Si un brazo no se ejecutó, se declara ausente.
+Los runners escriben un único JSON en stdout y los logs en stderr. No se versionan JSON, IDs, tokens
+ni logs crudos. Para obtener un resumen:
 
-## Mediciones
-
-- p50, p95 y p99 de latencia por solicitud y por escenario.
-- Códigos HTTP/estado de negocio y tasa de éxito.
-- Estado del Circuit Breaker (cerrado/abierto/semiabierto) cuando P2 lo exponga.
-- Rechazos del Bulkhead y solicitudes rechazadas por rate limit, por separado.
-- Continuidad de `GET /v1/customers` durante la falla.
-- Stock final, idempotencia y número de efectos por orden.
-- Repeticiones, warmup y duración de cada brazo.
-
-El rate limit del Gateway no debe usarse como sustituto de Circuit Breaker/Bulkhead ni ocultar
-sus rechazos. Si el rate limit interviene, se registra como variable separada.
-
-## Esquema CSV
-
-Cabecera prevista; no hay filas ni resultados fabricados en este documento:
-
-```csv
-timestamp,scenario,arm,repetition,warmup,request_count,latency_p50_ms,latency_p95_ms,latency_p99_ms,http_status,error_code,circuit_state,bulkhead_rejected,rate_limited,stock_final,idempotent_effects,notes
+```bash
+P4_TEST_PROJECT=repuestossur-p4-final \
+P4_TEST_PORT=8082 \
+node tests/t2/p4-independent.mjs --no-build \
+  | jq '{status, modes, dispatchFailure, restore}'
 ```
 
-La cabecera actual basta para separar `rate_limited`, `circuit_state` y `bulkhead_rejected`. Si P2
-expone un fallback de pago con un nombre propio, se añade una columna antes de ejecutar y se deja
-vacía hasta tener datos reales. No se rellenan filas ficticias.
+```bash
+P4_TEST_PROJECT=repuestossur-p4-final \
+P4_TEST_PORT=8082 \
+node tests/t2/p4-continuity.mjs \
+  | jq '{status, params, arms: [.arms[] | {name, protected, aggregate, repetitions: (.repetitions | length)}], restore}'
+```
+
+Los campos útiles de E3 son `params`, `arms[].protected`, `arms[].aggregate.post`,
+`arms[].aggregate.get`, `arms[].repetitions[].resilience` y `restore`. Las tablas reales están en
+[VERIFICATION.md](VERIFICATION.md), §10; no se mantiene un CSV con filas ficticias.
+
+## Límites
+
+- Muestras pequeñas: 4 brazos × 3 repeticiones; no es SLO, capacidad ni benchmark de Pagos.
+- Las latencias POST agregan respuestas `201` y `503`; no miden sólo cobros aprobados.
+- No se observó `HALF_OPEN` ni recuperación sostenida bajo carga medida más allá de la restauración.
+- En los brazos de Circuit Breaker, el warmup añade dos llamadas exitosas al historial; explica la
+  apertura tras tres fallas sin cambiar el mínimo configurado.
+- `GetPart` es una sonda de observabilidad; no prueba atomicidad de P1 ni el orden temporal de los
+  efectos.
+- No se ejecutó CI de GitHub ni una auditoría npm nueva.
+- La integración final en el Compose raíz y la CI del grupo siguen pendientes de coordinación.
 
 ## Reproducibilidad
 
-- Fijar versiones, imágenes, contratos y semillas antes de cada serie.
-- Ejecutar warmup y al menos tres repeticiones por brazo; registrar la duración.
-- Mantener la misma carga, datos y orden de pasos entre brazos.
-- No mezclar E1, E2 y E3 en una misma serie.
-- Guardar logs sólo con IDs de correlación y estados; nunca tokens, claves, cuerpos completos ni
-  secretos.
-- Separar artefactos de prueba de volúmenes persistentes. No borrar volúmenes para “limpiar”
-  resultados.
+- Fijar proyecto, puerto, imágenes, contratos y flags antes de la serie.
+- Ejecutar en exclusiva, sin smoke ni carga concurrente.
+- No borrar volúmenes para “limpiar” resultados; el runner restaura configuración, cancela ventas y
+  verifica stock.
+- No publicar IDs, tokens, claves, cuerpos completos ni logs crudos.
+- Las corridas de P2 se citan desde su propio documento y no se mezclan con los totales de P4.
 
 ## Ownership
 
-P4 es responsable de la orquestación y la medición. P4 no implementa toggles de P2/P3, no ejecuta
-SQL y no apaga la compensación en E2. La ejecución de E1–E3, los toggles de falla y las métricas
-definitivas dependen de P2/P3 y de la coordinación previa.
+P4 es responsable de la orquestación y la medición. P4 no implementa toggles de P2/P3, no ejecuta SQL
+y no apaga la compensación en E2. La integración en el Compose raíz, la CI del grupo y la publicación
+de la demo son responsabilidades de coordinación.
