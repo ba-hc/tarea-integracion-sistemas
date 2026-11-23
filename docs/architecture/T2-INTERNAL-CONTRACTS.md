@@ -1,6 +1,6 @@
 # Contratos internos de la T2
 
-Inventario conserva su [contrato gRPC v1](../../contracts/grpc/repuestossur/inventory/v1/inventory.proto). Despacho ofrece una interfaz REST interna. Pagos queda como propuesta para P2. La [API pública de Ventas](../../contracts/rest/openapi.yaml) sigue siendo la de la T1.
+Inventario conserva su [contrato gRPC v1](../../contracts/grpc/repuestossur/inventory/v1/inventory.proto). Despacho y Pagos ofrecen interfaces REST internas. La [API pública de Ventas](../../contracts/rest/openapi.yaml) sigue siendo la de la T1.
 
 ## Identidad de la venta
 
@@ -60,28 +60,29 @@ docker compose exec -T dispatch-api node --input-type=module - < apps/dispatch-a
 DISPATCH_FAIL_CREATE=false docker compose up -d --wait dispatch-api
 ```
 
-## Propuesta de contrato para Pagos
+## Contrato de Pagos (T2-201)
 
-Se propone REST interno con el mismo `orderId` como identificador de un único cobro por venta. El cuerpo de creación contiene `amountMinor` (entero positivo en la unidad menor de la moneda) y `currency`. La respuesta incluye esos campos, `orderId` y `status`.
+Pagos (`apps/payments-api`) escucha en `http://payments-api:3003` dentro de la red de Compose y guarda sus cobros en su propia base PostgreSQL (`payments-db`). No publica puertos en el host. Hay un único cobro por venta, identificado por el mismo `orderId` de Ventas. El cuerpo del cobro es `{ "amountMinor": <entero positivo>, "currency": "CLP" }`, con la moneda en código ISO 4217 en mayúsculas. Las respuestas exitosas o pendientes tienen la forma `{ orderId, amountMinor, currency, status }` y los errores usan el envelope `{ code, message, traceId }`. Pagos acepta `X-Trace-Id` (UUID), lo devuelve en la respuesta y lo propaga a la pasarela.
 
-| Operación | Ruta propuesta | Resultado esperado |
+| Operación | Ruta | Resultado |
 |---|---|---|
-| Cobrar | `PUT /internal/v1/payments/{orderId}` | `201` para un cobro nuevo confirmado y `200` al repetir un cobro aplicado, con el estado actual y sin volver a cobrar. `409` si cambian el importe o la moneda y `422 PAYMENT_DECLINED` si la pasarela rechaza el cobro de forma definitiva. |
-| Consultar | `GET /internal/v1/payments/{orderId}` | `200` con el estado actual o `404` si aún no hay registro para la venta. |
-| Reembolsar | `POST /internal/v1/payments/{orderId}/refund` | `200` con estado `REFUNDED` cuando se confirma, también al repetirlo. `404` si no hay registro y `409` si el estado no permite reembolsar. |
+| Cobrar | `PUT /internal/v1/payments/{orderId}` | `201 CHARGED` al confirmar el cobro y `200 CHARGED` al repetirlo, sin volver a cobrar. `202 PENDING` si la pasarela no confirmó dentro del plazo. `422 PAYMENT_DECLINED` si la pasarela lo rechazó, también al repetirlo. `409 PAYMENT_CONFLICT` si cambian el importe o la moneda y `409 PAYMENT_ALREADY_REFUNDED` si la venta ya se reembolsó. `503 PAYMENT_CHARGE_REJECTED` si Pagos rechazó **sin** que la pasarela llegara a cobrar. |
+| Consultar | `GET /internal/v1/payments/{orderId}` | `200` con el estado guardado o `404 PAYMENT_NOT_FOUND`. Nunca llama a la pasarela, así que responde aunque esté caída. |
+| Reembolsar | `POST /internal/v1/payments/{orderId}/refund` | `200 REFUNDED`, también al repetirlo. `202 REFUND_PENDING` si no se confirmó. `404 PAYMENT_NOT_FOUND` si no hay registro. `409 PAYMENT_NOT_REFUNDABLE` si el cobro fue rechazado (`GET` devuelve `DECLINED`). `503 PAYMENT_REFUND_REJECTED` si el circuito o el bulkhead impidieron intentarlo; el estado no cambia. |
+| Protecciones | `GET /internal/v1/resilience` | Estado del Circuit Breaker y del Bulkhead y contadores de rechazos, para el experimento y la demo. |
 
-P2 debe acordar con P3 las rutas y códigos definitivos, la moneda y el origen del importe. Los contratos actuales no incluyen precios. También queda por acordar cómo guardar y consultar el resultado incierto de la pasarela. Como base, `CHARGED`, `DECLINED` y `REFUNDED` representan resultados confirmados, y `202` con `PENDING` o `REFUND_PENDING` indica que la operación sigue por confirmar. El cobro y el reembolso necesitan claves estables distintas entre sí y reutilizables en sus respectivos reintentos contra la pasarela.
+Estados: `PENDING` (cobro enviado o por enviar, resultado incierto), `CHARGED`, `DECLINED`, `REFUND_PENDING` y `REFUNDED`. `REFUNDED` significa que la venta no retiene dinero: el cobro se devolvió o, si nunca llegó a la pasarela, su clave quedó anulada.
 
-### Lo que Ventas (P3) ya consume
+Lo que garantiza cada respuesta:
 
-El cliente de Pagos de Ventas (`apps/sales-api/src/saga/payments.client.ts`) implementa esta propuesta. Para cerrarla, P3 fijó con el equipo:
+- **`503 PAYMENT_CHARGE_REJECTED`** garantiza que no hubo cobro. Pagos sólo la envía en dos casos: si la pasarela nunca recibió ese cobro (`gateway_attempts = 0`), o si la pasarela confirmó que no lo aplicó en el único intento. En ambos borra el registro con una condición sobre ese estado. Con el circuito abierto, un cobro que ya se había enviado antes recibe `202 PENDING`, no esta garantía.
+- **`202 PENDING`** indica un resultado incierto. Repetir el mismo `PUT` es seguro: la pasarela es idempotente por la clave `charge-{orderId}`, así que el reintento resuelve el cobro sin duplicarlo.
+- **Reembolsar un cobro incierto** también es seguro. El reembolso usa su propia clave (`refund-{orderId}`). Si el cobro existía, lo devuelve. Si nunca llegó, la pasarela anula la clave y un cobro tardío con esa clave no tiene efecto.
+- **Consulta de un resultado incierto:** `GET` devuelve `PENDING` mientras no se resuelva. El reconciliador de Pagos (`PAYMENTS_RECONCILE_INTERVAL_MS`, 5 s por defecto) consulta la pasarela por la clave del cobro, sólo en lectura, y pasa el registro a `CHARGED`, `DECLINED` o `REFUNDED`. Si la pasarela no conoce el cobro, el registro sigue `PENDING` hasta que Ventas repita el cobro o lo reembolse.
 
-- **Importe:** unidades × `SALE_UNIT_PRICE_MINOR` (10 000 por defecto), en `CLP`. Se guarda en la Saga al crearla.
-- **Fallback del Circuit Breaker / Bulkhead:** `503` con `code: "PAYMENT_CHARGE_REJECTED"` cuando Pagos rechaza antes de contactar a la pasarela. Garantiza que no hubo cobro, y Ventas libera el stock de inmediato. Un `503` sin ese código se trata como resultado incierto.
-- **Plazo:** Ventas espera 2 s (`PAYMENTS_TIMEOUT_MS`). El timeout de Pagos hacia la pasarela debe ser menor.
-- **Resultado incierto:** `202 PENDING` o `REFUND_PENDING`, como arriba. Ventas repite el mismo comando o, al abortar, reembolsa y acepta `404` sólo si el cobro estaba en duda.
+Plazos: Pagos espera a la pasarela 1,2 s (`PAYMENTS_GATEWAY_TIMEOUT_MS`), menos que los 2 s con que Ventas espera a Pagos (`PAYMENTS_TIMEOUT_MS`). Así Pagos alcanza a responder `202` o un rechazo antes de que Ventas abandone la llamada. El importe lo fija Ventas: unidades × `SALE_UNIT_PRICE_MINOR` (10 000 por defecto), en `CLP`, guardado en la Saga al crearla.
 
-El detalle está en [P3-SAGA.md §6](../t2/P3-SAGA.md#6-contrato-que-ventas-espera-de-pagos-para-p2). Pagos sigue pendiente de integración.
+El diseño, las protecciones y la verificación están en [P2-PAGOS.md](../t2/P2-PAGOS.md) y [ADR-006](../adr/ADR-006-resiliencia-pagos.md).
 
 ## Decisiones ante una falla
 

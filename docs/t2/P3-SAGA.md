@@ -149,7 +149,7 @@ Por qué el defecto es `stock`: con `stock,dispatch`, cada venta real crea un de
 
 ## 6. Contrato que Ventas espera de Pagos (para P2)
 
-Se basa en la propuesta de [T2-INTERNAL-CONTRACTS.md](../architecture/T2-INTERNAL-CONTRACTS.md#propuesta-de-contrato-para-pagos), con dos precisiones:
+Se basa en la propuesta de [T2-INTERNAL-CONTRACTS.md](../architecture/T2-INTERNAL-CONTRACTS.md#contrato-de-pagos-t2-201), con dos precisiones:
 
 - `PUT /internal/v1/payments/{orderId}` con `{ "amountMinor": <int>, "currency": "CLP" }`. Responde `201 CHARGED` la primera vez y `200` con el estado actual al repetirse, sin volver a cobrar. Ante un rechazo definitivo de la pasarela, `422 PAYMENT_DECLINED`.
 - **Fallback del Circuit Breaker / Bulkhead:** cuando Pagos rechaza **antes** de contactar a la pasarela (circuito abierto o bulkhead lleno), debe responder `503` con `code: "PAYMENT_CHARGE_REJECTED"`. Ese código garantiza que no hubo cobro, igual que `DISPATCH_CREATE_REJECTED` en Despacho. Con él, Ventas libera el stock al instante (fail-fast). Un 503 sin ese código se trata como «en duda».
