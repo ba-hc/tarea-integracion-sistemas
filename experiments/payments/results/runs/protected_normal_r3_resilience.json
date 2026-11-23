@@ -1,0 +1,1 @@
+{"gateway":{"timeoutMs":1200},"circuitBreaker":{"enabled":true,"state":"CLOSED","windowCalls":10,"windowFailures":0,"failureRatePercent":0,"openedCount":0,"rejectedCalls":0,"successCalls":601,"failedCalls":0},"bulkhead":{"enabled":true,"maxConcurrent":8,"inFlight":0,"peakInFlight":1,"rejectedCalls":0},"reconciler":{"enabled":true,"runs":7,"resolved":0}}

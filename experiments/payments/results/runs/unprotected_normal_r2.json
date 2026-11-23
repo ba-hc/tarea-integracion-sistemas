@@ -1,0 +1,1 @@
+{"rateRps":20,"readRateRps":5,"duration":"30s","clientTimeout":"2s","charge":{"requests":600,"charged":600,"pending":0,"fallbackRejected":0,"declined":0,"clientTimeouts":0,"otherErrors":0,"p50Ms":29.6,"p95Ms":31.7,"p99Ms":33.5,"maxMs":41.1,"fallbackP95Ms":0},"read":{"requests":151,"errors":0,"p95Ms":3.6,"maxMs":21.7},"droppedIterations":0}
