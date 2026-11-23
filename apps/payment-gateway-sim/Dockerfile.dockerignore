@@ -1,0 +1,5 @@
+**
+!apps/payment-gateway-sim/**
+
+apps/payment-gateway-sim/node_modules
+apps/payment-gateway-sim/test

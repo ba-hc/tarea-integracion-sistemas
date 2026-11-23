@@ -1,0 +1,47 @@
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  runtime                = "nodejs"
+  moduleFormat           = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension    = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PaymentStatus {
+  PENDING
+  CHARGED
+  DECLINED
+  REFUND_PENDING
+  REFUNDED
+
+  @@map("payment_status")
+}
+
+enum RefundOutcome {
+  REFUNDED
+  VOIDED
+
+  @@map("refund_outcome")
+}
+
+/// Un cobro por venta. `order_id` es el UUID que genera Ventas.
+model Payment {
+  orderId         String         @id @map("order_id") @db.Uuid
+  amountMinor     Int            @map("amount_minor")
+  currency        String         @db.Char(3)
+  status          PaymentStatus  @default(PENDING)
+  /// Veces que Pagos envió el cobro a la pasarela. 0 garantiza que la pasarela nunca lo vio.
+  gatewayAttempts Int            @default(0) @map("gateway_attempts")
+  gatewayChargeId String?        @map("gateway_charge_id")
+  refundOutcome   RefundOutcome? @map("refund_outcome")
+  lastErrorCode   String?        @map("last_error_code")
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, updatedAt])
+  @@map("payments")
+}

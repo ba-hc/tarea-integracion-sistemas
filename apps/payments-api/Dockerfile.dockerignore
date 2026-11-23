@@ -1,0 +1,8 @@
+**
+!apps/payments-api/**
+
+apps/payments-api/node_modules
+apps/payments-api/dist
+apps/payments-api/src/generated
+apps/payments-api/.env
+apps/payments-api/.env.*

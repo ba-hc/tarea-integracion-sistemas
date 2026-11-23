@@ -1,0 +1,41 @@
+{
+  "name": "@repuestossur/payments-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "dependencies": {
+    "@nestjs/common": "12.1.0",
+    "@nestjs/core": "12.1.0",
+    "@nestjs/platform-express": "12.1.0",
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "prisma": "7.10.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@swc/core": "1.16.2",
+    "@types/node": "24.13.6",
+    "typescript": "6.0.3",
+    "unplugin-swc": "2.0.0",
+    "vitest": "5.0.1"
+  },
+  "allowScripts": {
+    "@prisma/engines@7.10.0": true,
+    "@swc/core@1.16.2": true,
+    "esbuild@0.28.2": true,
+    "prisma@7.10.0": true
+  },
+  "scripts": {
+    "build": "prisma generate && tsc -p tsconfig.build.json",
+    "start": "node --env-file-if-exists=.env dist/src/main.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:integration": "DATABASE_URL=${TEST_DATABASE_URL:?Set TEST_DATABASE_URL} prisma migrate deploy && vitest run --config vitest.integration.config.ts",
+    "prisma:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy"
+  }
+}
