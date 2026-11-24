@@ -320,7 +320,7 @@ async function exito() {
   const summary = await http('GET', `/web/v1/orders/${orderId}/summary`, { token: reader });
   info(JSON.stringify(summary.body));
   check(summary.status === 200 && summary.body.partial === false
-    && summary.body.payment?.status === 'CHARGED' && summary.body.dispatch?.status === 'CREATED',
+    && summary.body.payment?.data?.status === 'CHARGED' && summary.body.dispatch?.data?.status === 'CREATED',
   'resumen 200: pago CHARGED y despacho CREATED');
 
   const stockAfter = stock();
@@ -386,7 +386,7 @@ async function compensacion() {
     check(stockAfter === stockBefore, `stock ${stockBefore} -> ${stockAfter}: reserva liberada`);
     check(pasarelaAfter.chargesApproved - pasarelaBefore.chargesApproved === 1 && pasarelaAfter.refunds - pasarelaBefore.refunds === 1,
       'pasarela: 1 cobro y 1 reembolso (no queda cobro sin venta); el reintento no agregó efectos');
-    check(summary.body?.payment?.status === 'REFUNDED', `Pagos registra el cobro como ${summary.body?.payment?.status}`);
+    check(summary.body?.payment?.data?.status === 'REFUNDED', `Pagos registra el cobro como ${summary.body?.payment?.data?.status}`);
     check(publicOrder.status === 404, `no existe orden pública para la venta fallida (GET /v1/orders/{id} -> ${publicOrder.status})`);
 
     return {
