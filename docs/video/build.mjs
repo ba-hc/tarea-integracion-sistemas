@@ -212,7 +212,7 @@ ${termLines('s2', lines)}
     ...['#s2-ven', '#s2-bff', '#s2-inv', '#s2-pag', '#s2-des', '#s2-pas'].map((sel, i) => enter(sel, tAll + i * 0.12)),
     ...['#s2-e2', '#s2-e3', '#s2-e4', '#s2-e5', '#s2-e6', '#s2-e7', '#s2-e8', '#s2-e9'].map((sel, i) => show(sel, tAll + 0.2 + i * 0.1)),
     enter('#s2-gw', c('Sólo la puerta')), show('#s2-cli', c('Sólo la puerta')), show('#s2-e1', c('Sólo la puerta', 0.2)),
-    stamp('#s2-port', c('publica un puerto')), print('#s2-l0', c('publica un puerto', 0.5), lines[0].length),
+    show('#s2-term', c('publica un puerto', 0.2), 0.3), stamp('#s2-port', c('publica un puerto')), print('#s2-l0', c('publica un puerto', 0.5), lines[0].length),
     mark('#s2-g1', c('Valida el token')), mark('#s2-g2', c('decide por rol')), mark('#s2-g3', c('limita a cada')), mark('#s2-g4', c('tiempo máximo')),
     show('#s2-nobiz', c('sin lógica'), 0.3),
     print('#s2-l1', c('sin token'), lines[1].length),
@@ -284,7 +284,7 @@ ${termLines('s3', lines)}
     `document.querySelector("#s3-dis-st").textContent = "DONE"; document.querySelector("#s3-dis-st").classList.add("done");`,
     stamp('#s3-stock-st', c('reserva el stock')), stamp('#s3-pay-st', c('cobra en Pagos')), stamp('#s3-dis-st', c('crea el despacho')),
     enter('#s3-sale', c('La venta responde')), mark('#s3-sale', c('confirmada')),
-    print('#s3-l0', c('La venta responde'), lines[0].length),
+    show('#s3-term', c('La venta responde', -0.3), 0.3), print('#s3-l0', c('La venta responde'), lines[0].length),
     print('#s3-l1', c('El cliente reintenta'), lines[1].length),
     print('#s3-l2', c('otra cantidad'), lines[2].length),
     print('#s3-l3', c('Leemos la evidencia'), lines[3].length),
@@ -342,7 +342,7 @@ ${ba.map(([a, b, d], i) => `<tr id="s4-ba${i}"><td>${esc(a)}</td><td class="n">$
   const set = (sel, text, cls) => `document.querySelector("${sel}").textContent = "${text}"; document.querySelector("${sel}").classList.add("${cls}");`;
   const anims = [
     ...titleAnims('s4'),
-    print('#s4-l0', c('Inducimos'), induce[0].length), print('#s4-l1', c('recreamos Despacho', 0.6), induce[1].length),
+    show('#s4-term', c('Inducimos', -0.3), 0.3), print('#s4-l0', c('Inducimos'), induce[0].length), print('#s4-l1', c('recreamos Despacho', 0.6), induce[1].length),
     print('#s4-l2', c('La venta responde'), induce[2].length),
     enter('#s4-stock', 0.5), show('#s4-ar1', 0.6), enter('#s4-pay', 0.7), show('#s4-ar2', 0.8), enter('#s4-dis', 0.9),
     set('#s4-stock-st', 'DONE', 'done'), set('#s4-pay-st', 'DONE', 'done'), set('#s4-dis-st', 'REJECTED', 'rej'),
@@ -505,7 +505,7 @@ ${termLines('s6', okLines)}
   }
   anims.push(show('#s6-p-count', tCon + 2.4, 0.3), show('#s6-u-count', tSin + 2.2, 0.3));
   anims.push(enter('#s6-r1', c('Cuando la pasarela vuelve')));
-  anims.push(print('#s6-l0', c('la consistencia se mantiene'), okLines[0].length), print('#s6-l1', c('la consistencia se mantiene', 0.8), okLines[1].length));
+  anims.push(show('#s6-term', c('la consistencia se mantiene', -0.3), 0.3), print('#s6-l0', c('la consistencia se mantiene'), okLines[0].length), print('#s6-l1', c('la consistencia se mantiene', 0.8), okLines[1].length));
   anims.push(print('#s6-l2', c('cada unidad descontada'), okLines[2].length), print('#s6-l3', c('cada cobro neto'), okLines[3].length));
   anims.push(show('#s6-fast', c('Pagos responde de inmediato'), 0.3), mark('#s6-recp', c('tres coma dos')), mark('#s6-recu', c('Ese es el costo')));
   anims.push(show('#s6-k6t', c('en el experimento de carga'), 0.3), show('#s6-k6b', c('todos quedaron en duda'), 0.3), show('#s6-k6a', c('con ellas, catorce'), 0.3));
@@ -589,7 +589,7 @@ ${termLines('s8', cmd)}
     <div id="s8-files">Informe <code>docs/informe/INFORME-T2.pdf</code> · evidencia <code>docs/evidencia/</code><br>Repositorio <code>github.com/ba-hc/tarea-integracion-sistemas</code></div>`;
   const anims = [
     enter('#s8-r1', c('el camino feliz')), enter('#s8-r2', c('la falla del último paso')), enter('#s8-r3', c('la falla de la pasarela')),
-    print('#s8-l0', c('Todo se reproduce'), cmd[0].length), print('#s8-l1', c('y un script'), cmd[1].length),
+    show('#s8-term', c('Todo se reproduce', -0.3), 0.3), print('#s8-l0', c('Todo se reproduce'), cmd[0].length), print('#s8-l1', c('y un script'), cmd[1].length),
     show('#s8-files', c('Todo se reproduce', 1), 0.4),
   ];
   return sceneFile('s8', css, body, anims);
