@@ -5,8 +5,8 @@ lectura de la evidencia. **Es una reconstrucción narrada de la corrida de CI
 [45446846259](https://github.com/ba-hc/tarea-integracion-sistemas/actions/runs/45446846259)**, no una
 grabación de pantalla: cada línea de consola y cada cifra que aparece la lee `build.mjs` desde
 [`docs/evidencia/`](../evidencia/README.md) (incluida `consola.txt`, la salida real del script) y desde
-`experiments/payments/results/summary.csv`. El MP4 no se versiona (pesa más de lo razonable para git); se
-entrega aparte.
+`experiments/payments/results/summary.csv`. El MP4 no se versiona (pesa más de lo razonable para git); está publicado en el release
+[`t2-video-demo`](https://github.com/ba-hc/tarea-integracion-sistemas/releases/tag/t2-video-demo): **<https://github.com/ba-hc/tarea-integracion-sistemas/releases/download/t2-video-demo/RepuestosSur-T2-demo.mp4>** (SHA-256 `4b4fc1236f09209015edbb3b9c8ce3419f7ba1189bc30b3bd6f0489b70a4c123`).
 
 ## Escenas
 
