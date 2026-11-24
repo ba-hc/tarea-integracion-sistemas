@@ -1,6 +1,6 @@
 # Video de la demo (fuente)
 
-El video (≈4 min 23 s, 1920×1080, narrado) muestra el camino feliz, la inducción de cada falla y la
+El video (≈5 min 14 s, 1920×1080, narrado con voz sintética) muestra el camino feliz, la inducción de cada falla y la
 lectura de la evidencia. **Es una reconstrucción narrada de la corrida de CI
 [45446846259](https://github.com/ba-hc/tarea-integracion-sistemas/actions/runs/45446846259)**, no una
 grabación de pantalla: cada línea de consola y cada cifra que aparece la lee `build.mjs` desde
@@ -23,19 +23,28 @@ entrega aparte.
 
 ## Regenerarlo
 
-Requiere [HyperFrames](https://hyperframes.heygen.com) 0.9.91, ffmpeg y Python con `kokoro-onnx` para la voz.
+Requiere [HyperFrames](https://hyperframes.heygen.com) 0.9.91, ffmpeg y, para la voz, Python 3.12 con
+PyTorch CUDA y [`qwen-tts`](https://github.com/QwenLM/Qwen3-TTS) (Apache 2.0). Se generó en una RTX 2060
+SUPER de 8 GB.
+
+**Voz.** Es sintética. [`tts/disenar_voz.py`](tts/disenar_voz.py) la diseña con
+`Qwen3-TTS-12Hz-1.7B-VoiceDesign` a partir de una descripción en español (mujer, acento bogotano suave,
+tono de demo técnica). La candidata elegida es [`tts/ref/voz.wav`](tts/ref/voz.wav).
+[`tts/narrar.py`](tts/narrar.py) clona esa voz con `Qwen3-TTS-12Hz-0.6B-Base`, oración por oración, y
+deja junto a cada WAV un JSON con el inicio y el fin de cada oración. `build.mjs` usa esos tiempos para
+sincronizar las animaciones con la voz.
 
 > Estos pasos resumen cómo se generó el video, pero no se probaron tal cual desde un clon limpio. El
-> MP4 entregado se hizo con el lanzador local de HyperFrames, con `ffmpeg`/`ffprobe` y Python indicados
-> por variables de entorno (`HYPERFRAMES_FFMPEG_PATH`, `HYPERFRAMES_FFPROBE_PATH`, `HYPERFRAMES_PYTHON`).
-> Si un comando falla, revisa `npx hyperframes@0.9.91 <comando> --help`.
+> MP4 entregado se hizo con el lanzador local de HyperFrames, con `ffmpeg`/`ffprobe` indicados por
+> variables de entorno (`HYPERFRAMES_FFMPEG_PATH`, `HYPERFRAMES_FFPROBE_PATH`). Si un comando falla,
+> revisa `npx hyperframes@0.9.91 <comando> --help`.
 
 ```bash
+python -m venv .venv-qwen && .venv-qwen/Scripts/python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+.venv-qwen/Scripts/python -m pip install qwen-tts soundfile
 npx hyperframes@0.9.91 init demo && cd demo
 cp ../docs/video/build.mjs ../docs/video/SPEC.md . && cp -r ../docs/video/narracion .
-for f in narracion/*.txt; do
-  npx hyperframes@0.9.91 tts --text-file "$f" --voice em_alex --lang es --speed 0.92 -o "assets/vo/$(basename "$f" .txt).wav"
-done
+../.venv-qwen/Scripts/python ../docs/video/tts/narrar.py ../docs/video/tts/ref/voz.wav ../docs/video/tts/ref/voz.txt narracion assets/vo
 node build.mjs ..            # lee ../docs/evidencia y escribe index.html + compositions/
 npx hyperframes@0.9.91 check
 npx hyperframes@0.9.91 render -o demo-t2.mp4 --quality delivery

@@ -2,7 +2,7 @@
 
 GOAL:    the evaluator sees the happy path, each induced failure and how the evidence is read, and believes the
          numbers because every one is a real line of the CI run 45446846259 (commit e4c7f90).
-OUTPUT:  HyperFrames, 1920 x 1080, 30 fps, MP4. Narrated (Kokoro em_alex, es, speed 0.92). No music.
+OUTPUT:  HyperFrames, 1920 x 1080, 30 fps, MP4. Narrated with Qwen3-TTS (voice designed with 1.7B-VoiceDesign, Bogotá-accented female; cloned per sentence with 0.6B-Base, see tts/). No music.
 TIME:    8 scenes; each scene = 0.5 s lead + its narration + 1.2 s tail. Total must stay < 480 s (target ~4.5 min).
 LOOK:    engineering notebook + terminal. Ground #f2f1ed flat. Ink #16161a, secondary #55534e, rules #d6d4cd.
          Accent "con protecciones" #2a78d6, "sin protecciones" #eb6834, ok #0b7a3e, fail #b3261e.

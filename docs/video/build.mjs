@@ -4,7 +4,7 @@
 //   node build.mjs <ruta-al-repo>      (FFPROBE=ruta a ffprobe si no está en el PATH)
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const REPO = resolve(process.argv[2] ?? '../../repo');
@@ -51,7 +51,19 @@ const SCENES = [
 ].map(([id, vo]) => {
   const text = readFileSync(`narracion/${vo}.txt`, 'utf8').trim();
   const voDur = Number(execFileSync(FFPROBE, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', `assets/vo/${vo}.wav`]).toString().trim());
-  return { id, vo, text, voDur, dur: Math.round((LEAD + voDur + TAIL) * 100) / 100 };
+  // Tiempos por oración que deja tts/narrar.py (si no están, se estima sobre toda la escena).
+  const segFile = `assets/vo/${vo}.json`;
+  let segs = null;
+  if (existsSync(segFile)) {
+    let from = 0;
+    segs = JSON.parse(readFileSync(segFile, 'utf8')).map((s) => {
+      const at = text.indexOf(s.texto, from);
+      if (at < 0) throw new Error(`${id}: la oración «${s.texto.slice(0, 40)}…» no está en la narración`);
+      from = at + s.texto.length;
+      return { ...s, at, len: s.texto.length };
+    });
+  }
+  return { id, vo, text, voDur, segs, dur: Math.round((LEAD + voDur + TAIL) * 100) / 100 };
 });
 let clock = 0;
 for (const scene of SCENES) { scene.start = Math.round(clock * 100) / 100; clock += scene.dur; }
@@ -63,7 +75,10 @@ function cueOf(scene) {
   return (phrase, offset = 0) => {
     const i = scene.text.indexOf(phrase);
     if (i < 0) throw new Error(`${scene.id}: la narración no contiene «${phrase}»`);
-    return Math.round((LEAD + scene.voDur * (i / scene.text.length) + offset) * 100) / 100;
+    let t = scene.voDur * (i / scene.text.length);
+    const seg = scene.segs && [...scene.segs].reverse().find((s) => s.at <= i);
+    if (seg) t = seg.inicio + (seg.fin - seg.inicio) * Math.min(1, (i - seg.at) / seg.len);
+    return Math.round((LEAD + t + offset) * 100) / 100;
   };
 }
 
