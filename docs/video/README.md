@@ -25,6 +25,11 @@ entrega aparte.
 
 Requiere [HyperFrames](https://hyperframes.heygen.com) 0.9.91, ffmpeg y Python con `kokoro-onnx` para la voz.
 
+> Estos pasos resumen cómo se generó el video, pero no se probaron tal cual desde un clon limpio. El
+> MP4 entregado se hizo con el lanzador local de HyperFrames, con `ffmpeg`/`ffprobe` y Python indicados
+> por variables de entorno (`HYPERFRAMES_FFMPEG_PATH`, `HYPERFRAMES_FFPROBE_PATH`, `HYPERFRAMES_PYTHON`).
+> Si un comando falla, revisa `npx hyperframes@0.9.91 <comando> --help`.
+
 ```bash
 npx hyperframes@0.9.91 init demo && cd demo
 cp ../docs/video/build.mjs ../docs/video/SPEC.md . && cp -r ../docs/video/narracion .
