@@ -47,3 +47,4 @@ tmp/
 # Evidencia local de scripts/demo/escenarios.mjs (la de la CI se versiona en docs/evidencia)
 /evidencia/
 /docs/informe/informe.html
+!/docs/evidencia/compose.log
