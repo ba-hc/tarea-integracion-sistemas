@@ -20,6 +20,7 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -123,32 +124,46 @@ const statusKey = (sample) => (sample.code ? `${sample.status} ${sample.code}` :
 // ---------------------------------------------------------------------------
 // Acceso al sistema
 
-async function http(method, path, { token, body, headers = {} } = {}) {
+// Una conexión nueva por petición (agent: false): entre fases el script recrea
+// contenedores y espera varios segundos, y una conexión keep-alive reutilizada
+// que el Gateway ya cerró daría un falso error de red.
+function http(method, path, { token, body, headers = {} } = {}) {
   const started = performance.now();
-  try {
-    const response = await fetch(`${GATEWAY_URL}${path}`, {
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  return new Promise((resolve) => {
+    const request = httpRequest(`${GATEWAY_URL}${path}`, {
       method,
+      agent: false,
+      timeout: HTTP_TIMEOUT_MS,
       headers: {
         ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...(payload === undefined ? {} : { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }),
         ...headers,
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        let parsed = null;
+        try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+        resolve({
+          status: response.statusCode,
+          body: parsed,
+          code: parsed && typeof parsed === 'object' ? parsed.code : undefined,
+          ms: performance.now() - started,
+          retryAfter: response.headers['retry-after'] ?? null,
+        });
+      });
+      response.on('error', () => resolve({ status: 0, body: null, code: 'NETWORK_ERROR', ms: performance.now() - started }));
     });
-    const text = await response.text();
-    let parsed = null;
-    try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
-    return {
-      status: response.status,
-      body: parsed,
-      code: parsed && typeof parsed === 'object' ? parsed.code : undefined,
-      ms: performance.now() - started,
-      retryAfter: response.headers.get('retry-after'),
-    };
-  } catch (error) {
-    return { status: 0, body: null, code: error.name === 'TimeoutError' ? 'CLIENT_TIMEOUT' : 'NETWORK_ERROR', ms: performance.now() - started };
-  }
+    request.on('timeout', () => request.destroy(Object.assign(new Error('timeout'), { code: 'CLIENT_TIMEOUT' })));
+    request.on('error', (error) => resolve({
+      status: 0, body: null, code: error.code === 'CLIENT_TIMEOUT' ? 'CLIENT_TIMEOUT' : 'NETWORK_ERROR', detail: error.code, ms: performance.now() - started,
+    }));
+    if (payload !== undefined) request.write(payload);
+    request.end();
+  });
 }
 
 function token(sub, role) {
