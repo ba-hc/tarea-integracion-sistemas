@@ -48,7 +48,14 @@ jobs:
         run: buf breaking contracts/grpc --against '.git#tag=contracts-v1.0.0,subdir=contracts/grpc'
 
       - name: Validate Docker Compose configuration
-        run: docker compose config --quiet
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
+          GATEWAY_JWT_SECRET=ci-only-secret-with-at-least-32-bytes             docker compose -f docker-compose.yml -f docker-compose.p4.yml config --quiet
+
+      - name: Only the API Gateway publishes a host port
+        run: |
+          docker compose config --format json             | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const c=JSON.parse(s);const pub=Object.entries(c.services).filter(([,v])=>!(v.profiles?.length)&&(v.ports??[]).length).map(([k])=>k);console.log("published:",pub);process.exit(pub.length===1&&pub[0]==="api-gateway"?0:1)})'
 
   inventory:
     name: Inventory quality
@@ -210,12 +217,89 @@ jobs:
         working-directory: apps/payments-api
         run: npm run build
 
+  gateway-bff:
+    name: Gateway, BFF and Dispatch quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Gateway - install, typecheck, test, build
+        working-directory: apps/api-gateway
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: BFF - install, typecheck, test, build
+        working-directory: apps/web-bff
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Dispatch - install, typecheck, build
+        working-directory: apps/dispatch-api
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          npm run typecheck
+
+      - name: T2 runner and aggregation tests
+        run: node --test tests/t2/p4-smoke.test.mjs tests/t2/p4-independent.test.mjs tests/t2/p4-aggregation.test.mjs tests/t2/p4-continuity.test.mjs
+
+  e2e:
+    name: T2 end-to-end scenarios (single docker compose up)
+    runs-on: ubuntu-latest
+    needs: [contracts, sales, payments, gateway-bff]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Start the whole system with the root Compose file only
+        run: docker compose up --build -d --wait --wait-timeout 300
+
+      - name: Scenarios (exposure, success, compensation, contained cascade)
+        run: node scripts/demo/escenarios.mjs todo --out evidencia-ci
+
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p evidencia-ci
+          docker compose ps > evidencia-ci/compose-ps.txt 2>&1 || true
+          docker compose logs --no-color --timestamps > evidencia-ci/compose.log 2>&1 || true
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidencia-t2-${{ github.run_id }}
+          path: evidencia-ci/
+          retention-days: 30
+
+      - name: Stop the Compose stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
   system:
     name: Black-box and dependency-failure tests
     runs-on: ubuntu-latest
     needs: [contracts, inventory, sales]
     timeout-minutes: 35
     env:
+      # La suite black-box de la T1 habla directo con Sales: el overlay de
+      # desarrollo publica Sales e Inventory en loopback. La demo no lo usa.
+      COMPOSE_FILE: docker-compose.yml:docker-compose.dev.yml
       API_KEY_READER: local-reader-key-for-demo
       API_KEY_OPERATOR: local-operator-key-for-demo
       PART_WITH_STOCK: e58e2904-9db7-4c8d-8f36-7107e863a268
