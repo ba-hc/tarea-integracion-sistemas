@@ -64,8 +64,8 @@ services:
       GRPC_HOST: 0.0.0.0
       GRPC_PORT: 50051
       LOG_FORMAT: json
-    ports:
-      - "127.0.0.1:50051:50051"
+    # Interno: sin puerto publicado. docker-compose.dev.yml lo publica en loopback
+    # sólo para pruebas y experimentos de la T1.
     depends_on:
       inventory-db:
         condition: service_healthy
@@ -89,21 +89,21 @@ services:
       INVENTORY_GRPC_URL: ${INVENTORY_GRPC_URL:-inventory-grpc:50051}
       INVENTORY_RPC_DEADLINE_MS: ${INVENTORY_RPC_DEADLINE_MS:-800}
       INVENTORY_PROTO_PATH: /repo/contracts/grpc/repuestossur/inventory/v1/inventory.proto
-      # T2 Saga (docs/t2/P3-SAGA.md). Pagos (P2) aún no está en Compose, así que
-      # por defecto sólo se reserva stock (comportamiento T1). Para la Saga con
-      # Despacho: SAGA_STEPS=stock,dispatch. Con Pagos desplegado:
-      # SAGA_STEPS=stock,payment,dispatch (valor por defecto del código).
-      SAGA_STEPS: ${SAGA_STEPS:-stock}
+      # T2 Saga (docs/t2/P3-SAGA.md): reservar stock -> cobrar -> despachar.
+      # Subconjuntos (stock | stock,dispatch) sólo para pruebas aisladas.
+      SAGA_STEPS: ${SAGA_STEPS:-stock,payment,dispatch}
       PAYMENTS_BASE_URL: ${PAYMENTS_BASE_URL:-http://payments-api:3003}
       DISPATCH_BASE_URL: http://dispatch-api:3001
       SALE_UNIT_PRICE_MINOR: ${SALE_UNIT_PRICE_MINOR:-10000}
       SALE_CURRENCY: CLP
-    ports:
-      - "3000:3000"
+    # Interno: sólo el API Gateway llega a Sales. docker-compose.dev.yml publica
+    # 127.0.0.1:3000 para la suite black-box y el experimento de la T1.
     depends_on:
       sales-db:
         condition: service_healthy
       inventory-grpc:
+        condition: service_healthy
+      payments-api:
         condition: service_healthy
       dispatch-api:
         condition: service_healthy
@@ -152,6 +152,72 @@ services:
         condition: service_healthy
       payment-gateway-sim:
         condition: service_started
+
+  # T2-401: único punto de entrada. Valida el JWT, enruta y limita por cliente.
+  # Es el único servicio con puerto publicado en el host.
+  api-gateway:
+    build:
+      context: .
+      dockerfile: apps/api-gateway/Dockerfile
+    environment:
+      GATEWAY_HOST: "0.0.0.0"
+      GATEWAY_PORT: "8080"
+      GATEWAY_SALES_BASE_URL: "http://sales-api:3000"
+      GATEWAY_BFF_BASE_URL: "http://web-bff:3002"
+      # Secreto sólo para la demo local (>= 32 bytes). Sustitúyelo fuera de una
+      # máquina de desarrollo exportando GATEWAY_JWT_SECRET.
+      GATEWAY_JWT_SECRET: "${GATEWAY_JWT_SECRET:-local-demo-jwt-secret-change-me-0123456789}"
+      GATEWAY_JWT_ISSUER: "${GATEWAY_JWT_ISSUER:-repuestossur-demo}"
+      GATEWAY_JWT_AUDIENCE: "${GATEWAY_JWT_AUDIENCE:-repuestossur-gateway}"
+      GATEWAY_SALES_API_KEY_READER: "${API_KEY_READER:-local-reader-key-for-demo}"
+      GATEWAY_SALES_API_KEY_OPERATOR: "${API_KEY_OPERATOR:-local-operator-key-for-demo}"
+      GATEWAY_SALES_TIMEOUT_MS: "${GATEWAY_SALES_TIMEOUT_MS:-10000}"
+      GATEWAY_BFF_TIMEOUT_MS: "${GATEWAY_BFF_TIMEOUT_MS:-2500}"
+      GATEWAY_RATE_LIMIT_WINDOW_MS: "${GATEWAY_RATE_LIMIT_WINDOW_MS:-60000}"
+      GATEWAY_RATE_LIMIT_MAX_REQUESTS: "${GATEWAY_RATE_LIMIT_MAX_REQUESTS:-60}"
+      GATEWAY_RATE_LIMIT_MAX_IDENTITIES: "${GATEWAY_RATE_LIMIT_MAX_IDENTITIES:-10000}"
+      GATEWAY_MAX_REQUEST_BODY_BYTES: "${GATEWAY_MAX_REQUEST_BODY_BYTES:-1048576}"
+      GATEWAY_MAX_RESPONSE_BODY_BYTES: "${GATEWAY_MAX_RESPONSE_BODY_BYTES:-2097152}"
+    ports:
+      - "127.0.0.1:${GATEWAY_PUBLISHED_PORT:-8080}:8080"
+    depends_on:
+      sales-api:
+        condition: service_healthy
+      web-bff:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health', { signal: AbortSignal.timeout(2000) }).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+
+  # T2-401: BFF web. Compone en una respuesta el estado de Pagos y Despacho de
+  # una venta. Interno: sólo el Gateway lo llama.
+  web-bff:
+    build:
+      context: .
+      dockerfile: apps/web-bff/Dockerfile
+    environment:
+      BFF_HOST: "0.0.0.0"
+      BFF_PORT: "3002"
+      BFF_PAYMENTS_BASE_URL: "${BFF_PAYMENTS_BASE_URL:-http://payments-api:3003}"
+      BFF_DISPATCH_BASE_URL: "${BFF_DISPATCH_BASE_URL:-http://dispatch-api:3001}"
+      BFF_SOURCE_TIMEOUT_MS: "${BFF_SOURCE_TIMEOUT_MS:-1500}"
+      BFF_MAX_RESPONSE_BODY_BYTES: "${BFF_MAX_RESPONSE_BODY_BYTES:-2097152}"
+    expose:
+      - "3002"
+    depends_on:
+      payments-api:
+        condition: service_healthy
+      dispatch-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health', { signal: AbortSignal.timeout(2000) }).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
 
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.12.0

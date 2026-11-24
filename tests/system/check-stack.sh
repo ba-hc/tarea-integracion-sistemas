@@ -16,11 +16,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-BASE_URL="${SALES_BASE_URL:-http://localhost:3000}"
-# Los perfiles 'experiment' y 'test' quedan fuera a proposito: no son obligatorios.
-REQUIRED_SERVICES="sales-db inventory-db inventory-grpc sales-api"
+# T2: el unico puerto publicado es el del API Gateway; /v1/health pasa por el.
+BASE_URL="${GATEWAY_BASE_URL:-http://127.0.0.1:${GATEWAY_PUBLISHED_PORT:-8080}}"
+# Los perfiles 'experiment', 'test' y 'payments-experiment' quedan fuera a proposito.
+REQUIRED_SERVICES="sales-db inventory-db dispatch-db payments-db inventory-grpc sales-api dispatch-api payment-gateway-sim payments-api web-bff api-gateway"
 
 echo "==> Estado limpio"
+unset COMPOSE_FILE COMPOSE_PROFILES
 docker compose down -v --remove-orphans
 
 echo "==> docker compose up --build"
@@ -38,7 +40,7 @@ for service in $REQUIRED_SERVICES; do
   echo "    $service"
 done
 
-echo "==> GET /v1/health responde sin API key"
+echo "==> GET /v1/health responde sin token a traves del Gateway"
 status="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE_URL/v1/health")"
 if [ "$status" != "200" ]; then
   echo "FALLO: GET $BASE_URL/v1/health devolvio $status, se esperaba 200." >&2
