@@ -1,0 +1,543 @@
+{
+  "gateway": "http://127.0.0.1:8080",
+  "startedAt": "2026-11-24T17:20:10.620Z",
+  "sagaSteps": "stock,payment,dispatch",
+  "finishedAt": "2026-11-24T17:21:59.952Z",
+  "config": {
+    "peakSales": 24,
+    "peakClients": 4,
+    "downSales": 10,
+    "slowDelayMs": 3000,
+    "probeIntervalMs": 250
+  },
+  "protected": {
+    "arm": "CON protecciones (Circuit Breaker + Bulkhead + timeout 1,2 s)",
+    "protected": true,
+    "flags": {
+      "PAYMENTS_CIRCUIT_BREAKER_ENABLED": "true",
+      "PAYMENTS_BULKHEAD_ENABLED": "true",
+      "PAYMENTS_BULKHEAD_MAX_CONCURRENT": "8",
+      "PAYMENTS_GATEWAY_TIMEOUT_MS": "1200",
+      "PAYMENTS_CB_OPEN_MS": "5000"
+    },
+    "phases": {
+      "slow": {
+        "sales": {
+          "n": 24,
+          "p50": 452,
+          "p95": 1494.5,
+          "p99": 1499.1,
+          "max": 1499.1,
+          "statuses": {
+            "504 PAYMENT_TIMEOUT": 8,
+            "503 PAYMENT_UNAVAILABLE": 16
+          },
+          "wallMs": 1501
+        },
+        "otherOperations": {
+          "GET /v1/customers": {
+            "n": 11,
+            "p50": 6.8,
+            "p95": 24.9,
+            "p99": 24.9,
+            "max": 24.9,
+            "statuses": {
+              "200": 11
+            }
+          },
+          "GET resumen BFF": {
+            "n": 11,
+            "p50": 7.3,
+            "p95": 38.3,
+            "p99": 38.3,
+            "max": 38.3,
+            "statuses": {
+              "200": 11
+            }
+          }
+        },
+        "resilience": {
+          "gateway": {
+            "timeoutMs": 1200
+          },
+          "circuitBreaker": {
+            "enabled": true,
+            "state": "OPEN",
+            "windowCalls": 0,
+            "windowFailures": 0,
+            "failureRatePercent": 0,
+            "openedCount": 1,
+            "rejectedCalls": 0,
+            "successCalls": 0,
+            "failedCalls": 8
+          },
+          "bulkhead": {
+            "enabled": true,
+            "maxConcurrent": 8,
+            "inFlight": 0,
+            "peakInFlight": 8,
+            "rejectedCalls": 16
+          },
+          "reconciler": {
+            "enabled": true,
+            "runs": 1,
+            "resolved": 0
+          }
+        }
+      },
+      "down": {
+        "sales": {
+          "n": 10,
+          "p50": 31.9,
+          "p95": 47.7,
+          "p99": 47.7,
+          "max": 47.7,
+          "statuses": {
+            "503 PAYMENT_UNAVAILABLE": 10
+          },
+          "perSale": [
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 39
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 33
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 32
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 30
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 32
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 32
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 31
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 48
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 32
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 30
+            }
+          ]
+        },
+        "pasarelaCalls": 0,
+        "otherOperations": {
+          "GET /v1/customers": {
+            "n": 2,
+            "p50": 7.5,
+            "p95": 7.6,
+            "p99": 7.6,
+            "max": 7.6,
+            "statuses": {
+              "200": 2
+            }
+          },
+          "GET resumen BFF": {
+            "n": 2,
+            "p50": 7.8,
+            "p95": 9.8,
+            "p99": 9.8,
+            "max": 9.8,
+            "statuses": {
+              "200": 2
+            }
+          }
+        },
+        "resilience": {
+          "gateway": {
+            "timeoutMs": 1200
+          },
+          "circuitBreaker": {
+            "enabled": true,
+            "state": "OPEN",
+            "windowCalls": 0,
+            "windowFailures": 0,
+            "failureRatePercent": 0,
+            "openedCount": 1,
+            "rejectedCalls": 10,
+            "successCalls": 0,
+            "failedCalls": 8
+          },
+          "bulkhead": {
+            "enabled": true,
+            "maxConcurrent": 8,
+            "inFlight": 0,
+            "peakInFlight": 8,
+            "rejectedCalls": 16
+          },
+          "reconciler": {
+            "enabled": true,
+            "runs": 1,
+            "resolved": 0
+          }
+        }
+      },
+      "recovery": {
+        "attempts": [
+          {
+            "atMs": 52,
+            "status": 503,
+            "code": "PAYMENT_UNAVAILABLE",
+            "ms": 52
+          },
+          {
+            "atMs": 1086,
+            "status": 503,
+            "code": "PAYMENT_UNAVAILABLE",
+            "ms": 32
+          },
+          {
+            "atMs": 2119,
+            "status": 503,
+            "code": "PAYMENT_UNAVAILABLE",
+            "ms": 33
+          },
+          {
+            "atMs": 3192,
+            "status": 201,
+            "ms": 72
+          }
+        ],
+        "resilience": {
+          "gateway": {
+            "timeoutMs": 1200
+          },
+          "circuitBreaker": {
+            "enabled": true,
+            "state": "CLOSED",
+            "windowCalls": 0,
+            "windowFailures": 0,
+            "failureRatePercent": 0,
+            "openedCount": 1,
+            "rejectedCalls": 14,
+            "successCalls": 1,
+            "failedCalls": 8
+          },
+          "bulkhead": {
+            "enabled": true,
+            "maxConcurrent": 8,
+            "inFlight": 0,
+            "peakInFlight": 8,
+            "rejectedCalls": 16
+          },
+          "reconciler": {
+            "enabled": true,
+            "runs": 2,
+            "resolved": 0
+          }
+        }
+      }
+    },
+    "consistency": {
+      "sagas": {
+        "COMPLETED": 1,
+        "FAILED": 37
+      },
+      "stock": {
+        "before": 199,
+        "after": 198
+      },
+      "confirmedSales": 1,
+      "pasarela": {
+        "chargesApproved": 9,
+        "refunds": 8,
+        "voids": 0,
+        "apiRequests": 25,
+        "netCharges": 1
+      }
+    },
+    "logs": [
+      "payments-api-1  | \u001b[33m[Nest] 1  - \u001b[39m11/24/2026, 5:20:36 PM \u001b[33m   WARN\u001b[39m \u001b[38;5;3m[GatewayGuard] \u001b[39m\u001b[33mcircuit breaker state changed\u001b[39m { from: \u001b[32m'CLOSED'\u001b[39m, to: \u001b[32m'OPEN'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:37 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'95f3043b-92a5-43a8-ac8d-b5e48de6abee'\u001b[39m, traceId: \u001b[32m'e742fcbb-4e6d-488f-b864-9fa1a54ffe3e'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:37 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'3730cf1d-cbb0-4305-9df1-3c2614c16701'\u001b[39m, traceId: \u001b[32m'2b910d63-babe-4bee-990e-88ad735c76d6'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:37 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'55abc18c-0c38-4fb8-9086-d5bb95f5326c'\u001b[39m, traceId: \u001b[32m'5d073e02-e348-4559-a704-842e2b60f498'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:37 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'ff661a5f-5ab9-44b1-88a5-05a0244e2175'\u001b[39m, traceId: \u001b[32m'5f40d2af-f432-4952-9705-d33f64451b24'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:37 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'a593f3f1-5522-427a-a44c-b6cb1e3a53b9'\u001b[39m, traceId: \u001b[32m'442f9b0d-92e6-47a1-8ed9-0c7294de581a'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:38 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'1b238a08-99ef-4198-a428-872994ac352d'\u001b[39m, traceId: \u001b[32m'c988b4cd-df4d-4006-beaf-2e115db5f75b'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:38 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'4db0ee36-0268-43aa-b596-d4f4b220b8f9'\u001b[39m, traceId: \u001b[32m'89fce14c-f732-45ae-a530-6c781d2347a0'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:38 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'9c710825-d3b2-4f02-863a-0a1ca5f2bb16'\u001b[39m, traceId: \u001b[32m'c76126cd-a931-4c36-b70e-87349a869b67'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:38 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'3ff25a50-aedd-4bb3-80dd-372e02ff7e00'\u001b[39m, traceId: \u001b[32m'4d1a8b5f-e9e1-486e-a120-828abf0eb121'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:38 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'760a596e-a54e-4377-a305-d7f5fad97538'\u001b[39m, traceId: \u001b[32m'cae4d321-b4e3-4a73-a6a9-e5ec2ec6dda9'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:38 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'133ea3b7-816b-41eb-8713-dc6f997aecd3'\u001b[39m, traceId: \u001b[32m'0e15e147-af15-4876-89e4-c26a17c375df'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:39 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'b09a94ea-0a9f-4002-854c-9fb67ed89be0'\u001b[39m, traceId: \u001b[32m'6b860747-74b8-4b0c-a3a3-29dc5c931afc'\u001b[39m }",
+      "payments-api-1  | \u001b[32m[Nest] 1  - \u001b[39m11/24/2026, 5:20:40 PM \u001b[32m    LOG\u001b[39m \u001b[38;5;3m[Payments] \u001b[39m\u001b[32mcharge rejected before reaching the gateway\u001b[39m { reason: \u001b[32m'CIRCUIT_OPEN'\u001b[39m, orderId: \u001b[32m'351b7878-6904-4ce7-862d-aee2af82e1d6'\u001b[39m, traceId: \u001b[32m'38a86f53-501d-4ba5-b46d-1bc32c8a8e2c'\u001b[39m }",
+      "payments-api-1  | \u001b[33m[Nest] 1  - \u001b[39m11/24/2026, 5:20:41 PM \u001b[33m   WARN\u001b[39m \u001b[38;5;3m[GatewayGuard] \u001b[39m\u001b[33mcircuit breaker state changed\u001b[39m { from: \u001b[32m'OPEN'\u001b[39m, to: \u001b[32m'HALF_OPEN'\u001b[39m }",
+      "payments-api-1  | \u001b[33m[Nest] 1  - \u001b[39m11/24/2026, 5:20:42 PM \u001b[33m   WARN\u001b[39m \u001b[38;5;3m[GatewayGuard] \u001b[39m\u001b[33mcircuit breaker state changed\u001b[39m { from: \u001b[32m'HALF_OPEN'\u001b[39m, to: \u001b[32m'CLOSED'\u001b[39m }"
+    ]
+  },
+  "unprotected": {
+    "arm": "SIN protecciones (sin circuito ni bulkhead, timeout 30 s)",
+    "protected": false,
+    "flags": {
+      "PAYMENTS_CIRCUIT_BREAKER_ENABLED": "false",
+      "PAYMENTS_BULKHEAD_ENABLED": "false",
+      "PAYMENTS_BULKHEAD_MAX_CONCURRENT": "8",
+      "PAYMENTS_GATEWAY_TIMEOUT_MS": "30000",
+      "PAYMENTS_CB_OPEN_MS": "5000"
+    },
+    "phases": {
+      "slow": {
+        "sales": {
+          "n": 24,
+          "p50": 2290.2,
+          "p95": 2419.2,
+          "p99": 2419.6,
+          "max": 2419.6,
+          "statuses": {
+            "504 PAYMENT_TIMEOUT": 24
+          },
+          "wallMs": 2421
+        },
+        "otherOperations": {
+          "GET /v1/customers": {
+            "n": 14,
+            "p50": 5.6,
+            "p95": 23.8,
+            "p99": 23.8,
+            "max": 23.8,
+            "statuses": {
+              "200": 14
+            }
+          },
+          "GET resumen BFF": {
+            "n": 14,
+            "p50": 6.5,
+            "p95": 90.1,
+            "p99": 90.1,
+            "max": 90.1,
+            "statuses": {
+              "200": 14
+            }
+          }
+        },
+        "resilience": {
+          "gateway": {
+            "timeoutMs": 30000
+          },
+          "circuitBreaker": {
+            "enabled": false,
+            "state": "CLOSED",
+            "windowCalls": 0,
+            "windowFailures": 0,
+            "failureRatePercent": 0,
+            "openedCount": 0,
+            "rejectedCalls": 0,
+            "successCalls": 0,
+            "failedCalls": 0
+          },
+          "bulkhead": {
+            "enabled": false,
+            "maxConcurrent": 8,
+            "inFlight": 0,
+            "peakInFlight": 0,
+            "rejectedCalls": 0
+          },
+          "reconciler": {
+            "enabled": true,
+            "runs": 1,
+            "resolved": 0
+          }
+        }
+      },
+      "down": {
+        "sales": {
+          "n": 10,
+          "p50": 59.9,
+          "p95": 68.2,
+          "p99": 68.2,
+          "max": 68.2,
+          "statuses": {
+            "503 PAYMENT_UNAVAILABLE": 10
+          },
+          "perSale": [
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 62
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 58
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 63
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 60
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 62
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 53
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 53
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 52
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 62
+            },
+            {
+              "status": 503,
+              "code": "PAYMENT_UNAVAILABLE",
+              "ms": 68
+            }
+          ]
+        },
+        "pasarelaCalls": 10,
+        "otherOperations": {
+          "GET /v1/customers": {
+            "n": 3,
+            "p50": 4.6,
+            "p95": 5.5,
+            "p99": 5.5,
+            "max": 5.5,
+            "statuses": {
+              "200": 3
+            }
+          },
+          "GET resumen BFF": {
+            "n": 3,
+            "p50": 5.1,
+            "p95": 6.8,
+            "p99": 6.8,
+            "max": 6.8,
+            "statuses": {
+              "200": 3
+            }
+          }
+        },
+        "resilience": {
+          "gateway": {
+            "timeoutMs": 30000
+          },
+          "circuitBreaker": {
+            "enabled": false,
+            "state": "CLOSED",
+            "windowCalls": 0,
+            "windowFailures": 0,
+            "failureRatePercent": 0,
+            "openedCount": 0,
+            "rejectedCalls": 0,
+            "successCalls": 0,
+            "failedCalls": 0
+          },
+          "bulkhead": {
+            "enabled": false,
+            "maxConcurrent": 8,
+            "inFlight": 0,
+            "peakInFlight": 0,
+            "rejectedCalls": 0
+          },
+          "reconciler": {
+            "enabled": true,
+            "runs": 2,
+            "resolved": 0
+          }
+        }
+      },
+      "recovery": {
+        "attempts": [
+          {
+            "atMs": 60,
+            "status": 201,
+            "ms": 60
+          }
+        ],
+        "resilience": {
+          "gateway": {
+            "timeoutMs": 30000
+          },
+          "circuitBreaker": {
+            "enabled": false,
+            "state": "CLOSED",
+            "windowCalls": 0,
+            "windowFailures": 0,
+            "failureRatePercent": 0,
+            "openedCount": 0,
+            "rejectedCalls": 0,
+            "successCalls": 0,
+            "failedCalls": 0
+          },
+          "bulkhead": {
+            "enabled": false,
+            "maxConcurrent": 8,
+            "inFlight": 0,
+            "peakInFlight": 0,
+            "rejectedCalls": 0
+          },
+          "reconciler": {
+            "enabled": true,
+            "runs": 2,
+            "resolved": 0
+          }
+        }
+      }
+    },
+    "consistency": {
+      "sagas": {
+        "FAILED": 34,
+        "COMPLETED": 1
+      },
+      "stock": {
+        "before": 198,
+        "after": 197
+      },
+      "confirmedSales": 1,
+      "pasarela": {
+        "chargesApproved": 25,
+        "refunds": 24,
+        "voids": 0,
+        "apiRequests": 59,
+        "netCharges": 1
+      }
+    },
+    "logs": []
+  }
+}

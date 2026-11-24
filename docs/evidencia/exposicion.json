@@ -1,0 +1,41 @@
+{
+  "gateway": "http://127.0.0.1:8080",
+  "startedAt": "2026-11-24T17:20:10.620Z",
+  "sagaSteps": "stock,payment,dispatch",
+  "finishedAt": "2026-11-24T17:20:11.407Z",
+  "services": [
+    "api-gateway",
+    "dispatch-api",
+    "dispatch-db",
+    "inventory-db",
+    "inventory-grpc",
+    "payment-gateway-sim",
+    "payments-api",
+    "payments-db",
+    "sales-api",
+    "sales-db",
+    "web-bff"
+  ],
+  "published": [
+    {
+      "service": "api-gateway",
+      "ports": [
+        "127.0.0.1:8080->8080"
+      ]
+    }
+  ],
+  "auth": {
+    "anonymous": 401,
+    "readerPost": 403
+  },
+  "rateLimit": {
+    "requests": 70,
+    "counts": {
+      "200": 60,
+      "429 RATE_LIMIT_EXCEEDED": 10
+    },
+    "firstLimitedAt": 61,
+    "retryAfterSeconds": 49,
+    "otherClientStatus": 200
+  }
+}

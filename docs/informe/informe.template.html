@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Informe T2 · RepuestosSur</title>
+<style>
+  @page { size: A4; margin: 15mm 15mm 14mm 15mm; }
+  :root { --ink:#141414; --ink2:#4d4c48; --rule:#d9d7d1; --accent:#1f5fae; --soft:#f3f2ee; --con:#2a78d6; --sin:#eb6834; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 9.4pt; line-height: 1.38; color: var(--ink); margin: 0; background:#fff; }
+  h1 { font-size: 17pt; margin: 0 0 2px; letter-spacing: -0.01em; }
+  h2 { font-size: 11.5pt; margin: 12px 0 4px; padding-bottom: 2px; border-bottom: 1.5px solid var(--accent); color: var(--accent); break-after: avoid; }
+  h3 { font-size: 9.8pt; margin: 8px 0 3px; break-after: avoid; }
+  p { margin: 0 0 5px; text-align: justify; hyphens: auto; }
+  ul { margin: 0 0 5px 16px; padding: 0; } li { margin: 0 0 2px; }
+  .meta { color: var(--ink2); font-size: 8.6pt; margin-bottom: 8px; }
+  .meta b { color: var(--ink); }
+  table { border-collapse: collapse; width: 100%; margin: 3px 0 7px; font-size: 8.3pt; break-inside: avoid; }
+  th, td { border-bottom: 1px solid var(--rule); padding: 2.5px 5px; text-align: left; vertical-align: top; }
+  th { background: var(--soft); font-weight: 600; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  code, .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 8pt; }
+  figure { margin: 4px 0 8px; break-inside: avoid; text-align: center; }
+  figure img { max-width: 100%; }
+  figcaption { font-size: 8pt; color: var(--ink2); margin-top: 2px; text-align: left; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
+  .log { background: #f7f6f2; border: 1px solid var(--rule); border-radius: 3px; padding: 4px 6px; font-family: Consolas, monospace; font-size: 7.4pt; line-height: 1.32; white-space: pre-wrap; word-break: break-all; margin: 3px 0 7px; break-inside: avoid; }
+  .ok { color: #0b7a3e; font-weight: 600; }
+  .bad { color: #b3261e; font-weight: 600; }
+  .mermaid { text-align: center; }
+  .mermaid svg { max-width: 100% !important; height: auto; }
+  .small { font-size: 8pt; color: var(--ink2); }
+  .callout { border-left: 3px solid var(--accent); background: #f2f6fb; padding: 4px 8px; margin: 4px 0 7px; break-inside: avoid; }
+  .pb { break-before: page; }
+</style>
+</head>
+<body>
+
+<h1>RepuestosSur: venta de un repuesto como Saga resiliente</h1>
+<div class="meta">Integración de Sistemas · Unidad 3 · Encargo integrador <b>Forma D</b> (tienda de repuestos) · Universidad de Concepción ·
+{{fecha}}<br>
+Benjamín Henríquez (<span class="mono">@ba-hc</span>) · Martín Fuentealba Bizama (<span class="mono">@martin777pro</span>) ·
+Jorge Slimming (<span class="mono">@JorshSlimming</span>) · Tomás Gutiérrez (<span class="mono">@TomasGutierrez777</span>)<br>
+Repositorio: <span class="mono">github.com/ba-hc/tarea-integracion-sistemas</span> · evidencia de este informe: corrida de CI
+<span class="mono">{{run_id}}</span> sobre el commit <span class="mono">{{commit}}</span>.</div>
+
+<h2>1. Problema y alcance</h2>
+<p>La tienda vende coordinando tres servicios con almacenes propios: <b>Inventario</b> reserva unidades, <b>Pagos</b> cobra a través de
+una pasarela externa y <b>Despacho</b> crea la orden de entrega. El problema del encargo es el estado inconsistente: cobrar sin stock
+o cobrar y no despachar. Construimos sobre la base de la T1 (Ventas REST + Inventario gRPC) un sistema de 7 servicios y 4 bases que se
+levanta con un único <code>docker compose up</code>, expone sólo un API Gateway, implementa la venta como Saga orquestada y protege la
+dependencia frágil (la pasarela) con timeout, Circuit Breaker con fallback y Bulkhead. Lo central del trabajo es la evidencia: un
+script reproducible provoca los tres escenarios obligatorios y la CI lo ejecuta en cada cambio sobre el Compose raíz.</p>
+
+<h2>2. Arquitectura y exposición</h2>
+<figure>
+<div class="mermaid">
+flowchart LR
+  C[Cliente web / API] -->|JWT Bearer| GW[API Gateway<br/>token · rutas · rate limit]
+  GW -->|/v1/**  10 s| V[Ventas<br/>orquestador Saga]
+  GW -->|/web/v1/.../summary  2,5 s| B[BFF web]
+  V -->|gRPC 800 ms| I[Inventario]
+  V -->|REST 2 s| P[Pagos]
+  V -->|REST 1,5 s| D[Despacho]
+  B -->|1,5 s| P
+  B -->|1,5 s| D
+  P -->|1,2 s + Circuit Breaker + Bulkhead| X[(Pasarela externa<br/>simulada)]
+  V --- VDB[(BD Ventas)]
+  I --- IDB[(BD Inventario)]
+  P --- PDB[(BD Pagos)]
+  D --- DDB[(BD Despacho)]
+</div>
+<figcaption>Figura 1. Arquitectura desplegada. Sólo el Gateway publica un puerto (<code>127.0.0.1:8080</code>); la CI falla si otro
+servicio lo hace. Cada flecha indica el límite de espera de esa llamada: no hay llamadas entre servicios sin timeout.</figcaption>
+</figure>
+<p><b>Gateway sin lógica de negocio.</b> El Gateway valida un JWT HS256 (firma, emisor, audiencia y expiración), decide por rol
+(<code>reader</code> lee, <code>operator</code> escribe), limita por cliente (60 peticiones por minuto por <code>sub</code>, con
+<code>429</code> y <code>Retry-After</code>), aplica una lista blanca de rutas y reenvía con un timeout por destino. No reserva, no cobra
+y no tiene base de datos, así que cambiar la Saga no lo toca. Los servicios confían en la puerta: Ventas conserva su API key de la T1
+como credencial servicio a servicio, que el Gateway inyecta y el cliente nunca ve. <b>BFF por cliente.</b> El BFF web arma, en una sola
+respuesta a medida de la pantalla «mi compra», el estado del pago (Pagos) y del despacho (Despacho), consultados en paralelo. Si una
+fuente falla responde <code>200</code> con <code>partial: true</code> (degradación elegante) y nunca escribe: crear o cancelar es
+trabajo de Ventas, dueña de la venta (ADR-007). En la corrida de CI: {{expo_frase}}</p>
+
+<h2>3. La venta como Saga</h2>
+<h3>3.1 Saga y no Two-Phase Commit</h3>
+<ul>
+<li><b>La pasarela no puede votar.</b> Es un tercero que cobra o rechaza; no ofrece un «prepare» que retenga fondos bajo nuestro coordinador.</li>
+<li><b>2PC bloquea al ritmo del más lento.</b> Con la pasarela lenta, Inventario y Despacho mantendrían locks durante segundos, y una caída del
+coordinador entre <i>prepare</i> y <i>commit</i> los dejaría bloqueados: justo la cascada que hay que contener.</li>
+<li><b>Rompe la autonomía de los datos.</b> Exigiría transacciones XA entre cuatro PostgreSQL de dueños distintos.</li>
+<li><b>Los pasos son compensables y el negocio tolera consistencia eventual:</b> liberar, reembolsar y cancelar son acciones de negocio, y el
+stock nunca baja de lo disponible. El costo aceptado es la falta de aislamiento: la unidad reservada no se vende a otro mientras se compensa.</li>
+</ul>
+<h3>3.2 Orquestación y no coreografía</h3>
+<table>
+<tr><th>Criterio</th><th>Orquestación (elegida, en Ventas)</th><th>Coreografía</th></tr>
+<tr><td>Orden inverso estricto</td><td>Lo impone un solo componente: no libera stock antes de confirmar el reembolso.</td><td>Cada servicio debería inferirlo de eventos ajenos.</td></tr>
+<tr><td>Infraestructura</td><td>Llamadas existentes + dos tablas en la BD de Ventas.</td><td>Broker y outbox en cada servicio.</td></tr>
+<tr><td>Respuesta al cliente</td><td>Síncrona: <code>201</code> o el error público real.</td><td>Asíncrona: obligaría a exponer un estado <code>PENDING</code>.</td></tr>
+<tr><td>Evidencia</td><td>Una bitácora (<code>sale_saga_events</code>) con cada paso y compensación.</td><td>Correlacionar logs de tres servicios.</td></tr>
+</table>
+<p>Con tres pasos lineales y un dueño natural del proceso (Ventas ya era dueña de la orden y de la <code>Idempotency-Key</code>), la
+coreografía añade infraestructura sin beneficio. Antes de cada comando el paso se marca <code>IN_DOUBT</code> en la base (write-ahead);
+un rechazo confirmado compensa de inmediato y un timeout deja el paso en duda hasta reintentar o abortar, porque la llamada original pudo
+aplicarse. Un recuperador con lease retoma las compensaciones pendientes con backoff exponencial.</p>
+<h3>3.3 Idempotencia de pasos y compensaciones</h3>
+<table>
+<tr><th>Salto</th><th>Clave estable</th><th>Qué evita</th></tr>
+<tr><td>Cliente → Ventas</td><td><code>Idempotency-Key</code> → mismo <code>orderId</code>; otro cuerpo con la misma key: <code>409</code></td><td>Doble venta por reintento del cliente</td></tr>
+<tr><td>Ventas → Inventario</td><td><code>ReserveStock</code>/<code>ReleaseStock</code> por <code>order_id</code></td><td>Doble reserva o doble liberación</td></tr>
+<tr><td>Ventas → Pagos → pasarela</td><td><code>PUT /payments/{orderId}</code>; en la pasarela <code>charge-{orderId}</code> y <code>refund-{orderId}</code></td><td>Doble cobro o doble reembolso</td></tr>
+<tr><td>Ventas → Despacho</td><td><code>PUT /dispatches/{orderId}</code>, cancelar por <code>orderId</code></td><td>Doble despacho</td></tr>
+</table>
+<div class="two">
+<figure>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant G as Gateway
+  participant V as Ventas
+  participant I as Inventario
+  participant P as Pagos
+  participant D as Despacho
+  G->>V: POST /v1/orders + Idempotency-Key
+  V->>I: ReserveStock(orderId)
+  I-->>V: OK
+  V->>P: cobrar(orderId)
+  P-->>V: 201 CHARGED
+  V->>D: crear(orderId)
+  D-->>V: 201 CREATED
+  V-->>G: 201 CONFIRMED
+</div>
+<figcaption>Figura 2. Flujo feliz: tres transacciones locales confirmadas; la orden pública aparece sólo al final.</figcaption>
+</figure>
+<figure>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant G as Gateway
+  participant V as Ventas
+  participant I as Inventario
+  participant P as Pagos
+  participant D as Despacho
+  G->>V: POST /v1/orders
+  V->>I: ReserveStock → OK
+  V->>P: cobrar → CHARGED
+  V->>D: crear
+  D-->>V: 503 rechazo confirmado
+  V->>P: reembolsar → REFUNDED
+  V->>I: ReleaseStock → OK
+  V-->>G: 503 DISPATCH_UNAVAILABLE
+</div>
+<figcaption>Figura 3. Falla del último paso: compensación en orden inverso (reembolsar y después liberar), sin orden pública.</figcaption>
+</figure>
+</div>
+
+<h2>4. Resiliencia sobre la dependencia frágil</h2>
+<p>Las protecciones viven en el único borde que sale hacia la pasarela (<code>GatewayGuard</code> en Pagos, ADR-006); duplicarlas en
+Ventas o en el Gateway ocultaría qué dependencia falló.</p>
+<ul>
+<li><b>Timeout 1,2 s</b>, menor que los 2 s que Ventas espera a Pagos: Pagos siempre alcanza a responder algo útil antes de que Ventas abandone.</li>
+<li><b>Circuit Breaker</b> por conteo: ventana de 10 llamadas, mínimo 5, abre con 50 % de fallas (timeout, 5xx, conexión rechazada), queda
+abierto 5 s y deja pasar 1 sonda en semiabierto. Un cobro rechazado por la pasarela (<code>DECLINED</code>) es un éxito técnico.</li>
+<li><b>Bulkhead</b>: máximo 8 llamadas en vuelo hacia la pasarela, sin cola; el exceso se rechaza al instante en vez de consumir el plazo de Ventas.</li>
+<li><b>Fallback honesto</b>: si el circuito o el bulkhead impiden la llamada y la pasarela nunca recibió ese cobro, Pagos responde
+<code>503 PAYMENT_CHARGE_REJECTED</code> (garantía de que no hubo cobro) y Ventas libera el stock y responde <code>503 PAYMENT_UNAVAILABLE</code> en
+milisegundos. Si el cobro ya salió, responde <code>202 PENDING</code> y un reconciliador lo resuelve. Las lecturas no tocan la pasarela.</li>
+</ul>
+<figure>
+<div class="mermaid" style="max-width:88%;margin:0 auto">
+flowchart LR
+  V[Ventas<br/>espera ≤ 2 s] --> P[Pagos] --> BH{Bulkhead<br/>≤ 8 en vuelo}
+  BH -->|lleno| R[503 inmediato, sin tocar la pasarela<br/>Ventas libera el stock]
+  BH -->|hay cupo| CB{Circuito}
+  CB -->|ABIERTO| R
+  CB -->|CERRADO o sonda| X[(Pasarela)]
+  X -->|timeout 1,2 s o 5xx| F[cuenta como falla:<br/>50 % de 10 abre el circuito]
+</div>
+<figcaption>Figura 4. Falla en cascada contenida: dónde se corta la propagación cuando la pasarela está lenta o caída. Las lecturas
+(clientes, resumen BFF) no pasan por este camino.</figcaption>
+</figure>
+
+<h2>5. Experimentación y evidencia</h2>
+<h3>5.1 Diseño de los escenarios</h3>
+<p>Todo se provoca desde fuera, por el Gateway, con <code>scripts/demo/escenarios.mjs</code>; el interior se observa con
+<code>docker compose exec</code> (stock por gRPC, estado del circuito en <code>/internal/v1/resilience</code>, contadores de la pasarela y la
+bitácora de la Saga en la BD de Ventas). La CI corre el script completo sobre el <code>docker compose up</code> raíz y guarda la
+evidencia (<code>docs/evidencia</code>). Además, un experimento de carga con k6 aísla a Pagos (18 corridas de 30 s).</p>
+<table>
+<tr><th>Escenario</th><th>Cómo se provoca</th><th>Qué se mide</th><th>Hipótesis</th></tr>
+<tr><td>1 Éxito</td><td>Venta normal + reintento con la misma key + misma key con otro cuerpo</td><td>Estado, bitácora, stock, cobros en la pasarela, resumen BFF</td><td>Tres pasos DONE; un cobro y una reserva pese al reintento</td></tr>
+<tr><td>2 Compensación</td><td>Despacho recreado con <code>DISPATCH_FAIL_CREATE=true</code></td><td>Orden de compensación, stock y cobros antes/después, orden pública</td><td>Reembolso antes que liberación; sin cobro ni reserva huérfanos</td></tr>
+<tr><td>3a Lentitud + pico</td><td>Pasarela <code>slow</code> (3 s) y {{peak}} ventas simultáneas de 4 clientes</td><td>Latencia y códigos de venta, circuito, bulkhead, otras operaciones</td><td>Con protecciones: fail-fast y el resto sigue; sin ellas: esperas de 2 s y cobros en duda</td></tr>
+<tr><td>3b Caída</td><td>Pasarela <code>down</code> y {{down_n}} ventas seguidas</td><td>Latencia, llamadas que llegan a la pasarela, aperturas</td><td>El circuito deja de enviarle tráfico</td></tr>
+<tr><td>Brazo de control</td><td>Mismos pasos con Pagos recreado sin circuito ni bulkhead y timeout 30 s</td><td>Lo mismo</td><td>Muestra qué pasa SIN el patrón</td></tr>
+</table>
+
+<h3>5.2 Escenario 1: éxito</h3>
+<p>{{e1_frase}}</p>
+<div class="log">{{e1_log}}</div>
+
+<h3>5.3 Escenario 2: falla del último paso y compensación</h3>
+<p>{{e2_frase}}</p>
+<table>
+<tr><th>Hora (UTC)</th><th>Paso</th><th>Acción</th><th>Resultado</th><th>Código</th></tr>
+{{e2_tabla}}
+</table>
+<table>
+<tr><th>Observación</th><th class="n">Antes</th><th class="n">Después</th><th>Lectura</th></tr>
+{{e2_antes_despues}}
+</table>
+
+<h3>5.4 Escenario 3: falla en cascada contenida (end-to-end, por el Gateway)</h3>
+<table>
+<tr><th>Fase / métrica</th><th class="n">Con protecciones</th><th class="n">Sin protecciones</th></tr>
+{{e3_tabla}}
+</table>
+<figure><img src="img/e2e-cascada.png" alt="Latencias de venta y de otras operaciones con y sin protecciones">
+<figcaption>Figura 5. Corrida end-to-end de la CI: p95 de la venta en cada fase y p95 de otras operaciones durante el pico.</figcaption></figure>
+<p>Transiciones del circuito registradas por Pagos durante el brazo protegido (log del contenedor):</p>
+<div class="log">{{e3_log}}</div>
+
+<h3>5.5 Experimento de carga sobre Pagos (k6, 3 repeticiones por combinación)</h3>
+<div class="two">
+<figure><img src="img/p2-latencia-p95.png" alt="p95 del cobro por estado de la pasarela"><figcaption>Figura 6. p95 del cobro: con la pasarela lenta, el
+brazo sin protecciones agota los 2 s del cliente en cada cobro.</figcaption></figure>
+<figure><img src="img/p2-efectos.png" alt="Cobros en duda y llamadas a la pasarela caída"><figcaption>Figura 7. Efectos sobre el negocio y la dependencia:
+cobros en duda (lenta) y llamadas que recibe la pasarela caída.</figcaption></figure>
+</div>
+<figure><img src="img/p2-timeline-circuito.png" alt="Línea de tiempo del circuito" style="max-width:78%"><figcaption>Figura 8. Línea de tiempo con la pasarela
+lenta: el bulkhead acota a 8 las llamadas en vuelo y rechaza 17 en el primer segundo y medio; el circuito abre a los 1,5 s y desde ahí responde
+sin esperar, con una sonda cada 5 s.</figcaption></figure>
+
+<h3>5.6 Interpretación: qué habría pasado sin los patrones</h3>
+{{interpretacion}}
+
+<h2>6. Conclusiones, límites y reproducción</h2>
+<p>La venta queda consistente en los tres escenarios: el camino feliz deja los tres pasos firmes, la falla del último paso se compensa en
+orden inverso sin cobro ni reserva huérfanos, y la falla de la pasarela queda contenida en Pagos: el circuito corta el tráfico hacia una
+dependencia que no responde, el bulkhead acota lo que una pasarela lenta puede retener y el resto del sistema sigue respondiendo. La
+idempotencia por <code>orderId</code> en todos los saltos es lo que permite reintentar y compensar sin miedo.</p>
+<p><b>Límites.</b> La pasarela es simulada, con latencias deterministas; el circuito, el bulkhead y el rate limit son por instancia (hay una);
+el JWT es de demo; las cifras provienen de una máquina (runner de CI o portátil) y no son una prueba de capacidad. A la carga probada, las
+lecturas no se degradaron tampoco sin bulkhead: el aislamiento de lecturas viene del diseño (no tocan la pasarela). El aporte medido del
+bulkhead es acotar las llamadas en vuelo y los cobros en duda, no proteger las lecturas.</p>
+<p><b>Reproducción.</b> <code>docker compose up --build -d --wait</code> y luego <code>node scripts/demo/escenarios.mjs todo</code>
+(4–6 min). El README explica cómo provocar cada falla a mano. Uso de IA: ChatGPT, OpenAI Codex y Claude Code como asistentes de
+análisis, código, pruebas y redacción; el equipo revisó las decisiones y los resultados contra las pruebas y la evidencia de la CI.</p>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'neutral', securityLevel: 'loose',
+    themeVariables: { fontSize: '12px', fontFamily: 'Segoe UI, Arial, sans-serif' },
+    flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' },
+    sequence: { useMaxWidth: true, actorMargin: 28, messageMargin: 22, boxMargin: 4, mirrorActors: false } });
+</script>
+</body>
+</html>

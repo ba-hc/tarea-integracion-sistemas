@@ -1,0 +1,12 @@
+NAME                                               IMAGE                                            COMMAND                  SERVICE               CREATED              STATUS                        PORTS
+tarea-integracion-sistemas-api-gateway-1           tarea-integracion-sistemas-api-gateway           "docker-entrypoint.s…"   api-gateway           2 minutes ago        Up About a minute (healthy)   127.0.0.1:8080->8080/tcp
+tarea-integracion-sistemas-dispatch-api-1          tarea-integracion-sistemas-dispatch-api          "docker-entrypoint.s…"   dispatch-api          About a minute ago   Up About a minute (healthy)   3001/tcp
+tarea-integracion-sistemas-dispatch-db-1           postgres:18.6-alpine                             "docker-entrypoint.s…"   dispatch-db           2 minutes ago        Up 2 minutes (healthy)        5432/tcp
+tarea-integracion-sistemas-inventory-db-1          postgres:18.6-alpine                             "docker-entrypoint.s…"   inventory-db          2 minutes ago        Up 2 minutes (healthy)        5432/tcp
+tarea-integracion-sistemas-inventory-grpc-1        tarea-integracion-sistemas-inventory-grpc        "docker-entrypoint.s…"   inventory-grpc        2 minutes ago        Up 2 minutes (healthy)        50051/tcp
+tarea-integracion-sistemas-payment-gateway-sim-1   tarea-integracion-sistemas-payment-gateway-sim   "docker-entrypoint.s…"   payment-gateway-sim   2 minutes ago        Up 2 minutes (healthy)        3010/tcp
+tarea-integracion-sistemas-payments-api-1          tarea-integracion-sistemas-payments-api          "docker-entrypoint.s…"   payments-api          6 seconds ago        Up 5 seconds (healthy)        3003/tcp
+tarea-integracion-sistemas-payments-db-1           postgres:18.6-alpine                             "docker-entrypoint.s…"   payments-db           2 minutes ago        Up 2 minutes (healthy)        5432/tcp
+tarea-integracion-sistemas-sales-api-1             tarea-integracion-sistemas-sales-api             "docker-entrypoint.s…"   sales-api             2 minutes ago        Up 2 minutes (healthy)        3000/tcp
+tarea-integracion-sistemas-sales-db-1              postgres:18.6-alpine                             "docker-entrypoint.s…"   sales-db              2 minutes ago        Up 2 minutes (healthy)        5432/tcp
+tarea-integracion-sistemas-web-bff-1               tarea-integracion-sistemas-web-bff               "docker-entrypoint.s…"   web-bff               2 minutes ago        Up 2 minutes (healthy)        3002/tcp
