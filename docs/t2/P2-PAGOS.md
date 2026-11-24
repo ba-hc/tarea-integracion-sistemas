@@ -92,7 +92,7 @@ También se puede arrancar en un modo (`GATEWAY_SIM_MODE=slow docker compose up 
 
 ## 5. Para P3: activar Pagos en la Saga
 
-Pagos ya está en el Compose raíz, pero el defecto de Ventas sigue siendo `SAGA_STEPS=stock`. Para la Saga completa:
+Pagos está en el Compose raíz y, desde la entrega final, la Saga completa es el valor por defecto de Ventas. Equivale a:
 
 ```bash
 SAGA_STEPS=stock,payment,dispatch docker compose up --build -d --wait

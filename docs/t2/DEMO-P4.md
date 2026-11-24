@@ -1,5 +1,7 @@
 # Demo P4 — Gateway, BFF y continuidad
 
+> **Entrega final (2026-11-24):** el Compose raíz ya integra Gateway y BFF, ejecuta la Saga completa (`SAGA_STEPS=stock,payment,dispatch`) por defecto y sólo publica el Gateway. La CI corre los escenarios end-to-end sobre ese `docker compose up` ([docs/evidencia](../evidencia/README.md)). Las menciones a integración «pendiente» más abajo describen el estado histórico de este hito.
+
 Guion corto para una demo en vivo. No graba vídeo ni modifica el video preexistente. Los comandos se
 ejecutan desde la raíz del repositorio.
 
@@ -140,7 +142,7 @@ Qué señalar:
 
 ## Cierre
 
-- P4 queda cerrado en modo overlay local; la integración en el Compose raíz y la CI del grupo siguen
-  pendientes de coordinación.
+- Integración final hecha: el Compose raíz levanta Gateway y BFF; `scripts/demo/escenarios.mjs`
+  automatiza estos pasos sobre ese stack.
 - No se grabó vídeo nuevo ni se alteró el preexistente.
 - No se borraron volúmenes, no se reinició el simulador y no se detuvieron otros proyectos.

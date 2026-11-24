@@ -337,4 +337,4 @@ evidencia P4 ni se publican resultados de otro componente como propios.
 - No se probó `HALF_OPEN` ni recuperación sostenida bajo carga medida.
 - `GetPart` es una sonda de observabilidad; no prueba atomicidad de P1 ni orden temporal de efectos.
 - No se ejecutó SQL desde P4, no se leyeron bases ajenas y no se alteró el Compose raíz.
-- La integración final en el Compose raíz y la CI del grupo siguen pendientes de coordinación.
+- Integración final hecha después de este hito: Compose raíz único y job end-to-end en la CI ([docs/evidencia](../evidencia/README.md)).

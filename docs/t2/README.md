@@ -4,10 +4,11 @@ P4 queda cerrado en su modo overlay local. Gateway y BFF no cambiaron su runtime
 la exposición sigue siendo la misma y ahora se verifica contra Pagos P2 **real** y la pasarela de
 pagos **simulada oficial**. No hay dinero real.
 
-El Compose raíz conserva `SAGA_STEPS=stock` por defecto y ya contiene P1–P3. El overlay P4 agrega
-Gateway y BFF; la demo y las pruebas completas activan `stock,payment,dispatch` de forma explícita.
-La integración final en el Compose raíz y la CI del grupo siguen pendientes de coordinación. La
-evidencia real está en [VERIFICATION.md](VERIFICATION.md), §10.
+**Entrega final:** el Compose raíz ya contiene Gateway y BFF, activa la Saga completa por defecto y
+sólo publica el Gateway; para la demo basta `docker compose up --build` (ver el [README raíz](../../README.md)).
+Este documento queda como guía de los runners aislados de P4, que usan `docker-compose.p4.yml` para
+exigir un secreto propio y elegir el puerto. La evidencia de este hito está en
+[VERIFICATION.md](VERIFICATION.md), §10, y la end-to-end en [docs/evidencia](../evidencia/README.md).
 
 ## Requisitos
 

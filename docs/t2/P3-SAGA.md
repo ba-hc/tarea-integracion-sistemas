@@ -1,6 +1,6 @@
 # P3: Saga de venta en Ventas (T2-301, T2-302, T2-303)
 
-**Estado:** Saga, compensaciones y recuperación implementadas y probadas. Pagos (P2) está **pendiente de integración**: Ventas tiene el cliente de Pagos y lo prueba contra un stub HTTP, pero ese servicio no existe en el repositorio. Mientras tanto, el Compose raíz ejecuta por defecto `SAGA_STEPS=stock`, el mismo comportamiento de la T1, para no alterar la CI ni el smoke de P4. La Saga con Despacho se activa al levantar el Compose (ver §5).
+**Estado:** Saga, compensaciones y recuperación implementadas y probadas. Pagos (P2) está integrado y el Compose raíz ejecuta por defecto la Saga completa (`SAGA_STEPS=stock,payment,dispatch`). Los subconjuntos de §5 sirven sólo para pruebas aisladas. La evidencia end-to-end está en [docs/evidencia](../evidencia/README.md).
 
 Decisiones de arquitectura: [ADR-005](../adr/ADR-005-saga-orquestada.md).
 
