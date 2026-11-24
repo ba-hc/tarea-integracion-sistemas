@@ -32,6 +32,7 @@
   .small { font-size: 8pt; color: var(--ink2); }
   .callout { border-left: 3px solid var(--accent); background: #f2f6fb; padding: 4px 8px; margin: 4px 0 7px; break-inside: avoid; }
   .pb { break-before: page; }
+  figure.seq .mermaid { max-width: 86%; margin: 0 auto; }
 </style>
 </head>
 <body>
@@ -112,8 +113,7 @@ aplicarse. Un recuperador con lease retoma las compensaciones pendientes con bac
 <tr><td>Ventas → Pagos → pasarela</td><td><code>PUT /payments/{orderId}</code>; en la pasarela <code>charge-{orderId}</code> y <code>refund-{orderId}</code></td><td>Doble cobro o doble reembolso</td></tr>
 <tr><td>Ventas → Despacho</td><td><code>PUT /dispatches/{orderId}</code>, cancelar por <code>orderId</code></td><td>Doble despacho</td></tr>
 </table>
-<div class="two">
-<figure>
+<figure class="seq">
 <div class="mermaid">
 sequenceDiagram
   autonumber
@@ -133,7 +133,7 @@ sequenceDiagram
 </div>
 <figcaption>Figura 2. Flujo feliz: tres transacciones locales confirmadas; la orden pública aparece sólo al final.</figcaption>
 </figure>
-<figure>
+<figure class="seq">
 <div class="mermaid">
 sequenceDiagram
   autonumber
@@ -153,7 +153,6 @@ sequenceDiagram
 </div>
 <figcaption>Figura 3. Falla del último paso: compensación en orden inverso (reembolsar y después liberar), sin orden pública.</figcaption>
 </figure>
-</div>
 
 <h2>4. Resiliencia sobre la dependencia frágil</h2>
 <p>Las protecciones viven en el único borde que sale hacia la pasarela (<code>GatewayGuard</code> en Pagos, ADR-006); duplicarlas en

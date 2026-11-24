@@ -18,6 +18,7 @@ Todas las cifras del [informe](../informe/INFORME-T2.pdf) y del video salen de e
 | `escenario1-exito.json` | Venta `201 CONFIRMED`, reintento con la misma key, conflicto `409`, bitácora de la Saga, stock y cobros antes/después, resumen del BFF. |
 | `escenario2-compensacion.json` | Despacho rechazando: `503 DISPATCH_UNAVAILABLE`, bitácora con compensaciones en orden inverso (reembolso → liberación), stock 199 → 199, 1 cobro y 1 reembolso, orden pública `404`. |
 | `escenario3-cascada.json` | Brazos con y sin protecciones: pasarela lenta + pico de 24 ventas, pasarela caída + 10 ventas, recuperación, estado del circuito y del bulkhead, sondas de otras operaciones, consistencia final y log del circuito. |
+| `consola.txt` | Salida del script en el job (sin marcas de tiempo ni colores): lo que se ve en la terminal al correr la demo. |
 | `compose-ps.txt` | `docker compose ps` al terminar: once servicios sanos, sólo el Gateway con puerto en el host. |
 | `compose.log` | Logs de todos los contenedores durante la corrida (sin códigos de color). |
 

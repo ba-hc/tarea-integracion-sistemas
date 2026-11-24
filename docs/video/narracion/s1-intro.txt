@@ -1,0 +1,1 @@
+RepuestosSur. Vender un repuesto coordinando tres servicios, Inventario, Pagos y Despacho, sin dejar nunca una venta a medias. Este video es una reconstrucción narrada de una corrida real de integración continua: cada línea de consola y cada cifra que verás sale de la evidencia guardada en el repositorio.

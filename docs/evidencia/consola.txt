@@ -1,0 +1,120 @@
+node scripts/demo/escenarios.mjs todo --out evidencia-ci
+   Gateway http://127.0.0.1:8080; SAGA_STEPS=stock,payment,dispatch
+
+== Exposición: API Gateway como único punto de entrada ==
+-> Puertos publicados por el stack (docker compose ps)
+   api-gateway: 127.0.0.1:8080->8080
+[ok] sólo api-gateway publica un puerto en el host
+-> Sin token
+[ok] GET /v1/customers sin token -> 401 UNAUTHORIZED
+-> Token reader intentando escribir
+[ok] POST /v1/customers con rol reader -> 403 FORBIDDEN
+-> Rate limiting por cliente: 70 GET seguidos con el mismo token
+   respuestas: {"200":60,"429 RATE_LIMIT_EXCEEDED":10}; primera 429 en la petición #61, Retry-After=49 s
+[ok] el Gateway corta con 429 RATE_LIMIT_EXCEEDED al superar la cuota
+[ok] otro cliente sigue atendido mientras el primero está limitado -> 200
+   evidencia: evidencia-ci/exposicion.json
+
+== Escenario 1 — Éxito: vender un repuesto (reservar -> cobrar -> despachar) ==
+   stock antes: 200; cobros aprobados en la pasarela: 0
+-> POST /v1/orders (Idempotency-Key demo-exito-4234ea90-…)
+[ok] venta -> 201 CONFIRMED en 228 ms
+-> El cliente reintenta con la misma Idempotency-Key
+[ok] reintento -> 201, misma orden 24b3a76b…
+[ok] misma key con otra cantidad -> 409 IDEMPOTENCY_KEY_CONFLICT
+-> BFF web: resumen de la venta (Pagos + Despacho en una respuesta)
+   {"orderId":"24b3a76b-636d-4364-ac95-4b8f8c8e63ec","partial":false,"payment":{"availability":"available","data":{"orderId":"24b3a76b-636d-4364-ac95-4b8f8c8e63ec","status":"CHARGED"}},"dispatch":{"availability":"available","data":{"orderId":"24b3a76b-636d-4364-ac95-4b8f8c8e63ec","status":"CREATED","items":[{"partId":"d6e1fd98-cb07-458f-aa12-6fe220b37604","quantity":1}]}}}
+[ok] resumen 200: pago CHARGED y despacho CREATED
+   bitácora de la Saga: stock:EXECUTE:DONE -> payment:EXECUTE:DONE -> dispatch:EXECUTE:DONE -> sale:COMPLETE:DONE
+[ok] Saga COMPLETED con los tres pasos DONE
+[ok] stock 200 -> 199: una sola reserva pese al reintento
+[ok] la pasarela registró un solo cobro (sin doble cobro)
+   evidencia: evidencia-ci/escenario1-exito.json
+
+== Escenario 2 — Falla el último paso (Despacho): compensación en orden inverso ==
+-> Se provoca la falla: Despacho rechaza toda creación (DISPATCH_FAIL_CREATE=true)
+[ok] dispatch-api recreado con la falla activa
+   stock antes: 199; pasarela cobros=1 reembolsos=0
+-> POST /v1/orders
+   {"code":"DISPATCH_UNAVAILABLE","message":"Dispatch service is unavailable","traceId":"05faf300-e787-4e38-9a92-d62c63a11183"}
+[ok] venta -> 503 DISPATCH_UNAVAILABLE en 174 ms
+   tras la falla: Sagas {"FAILED":1}
+   bitácora de la Saga (base de Ventas):
+     17:20:20.010  stock    EXECUTE    DONE
+     17:20:20.043  payment  EXECUTE    DONE
+     17:20:20.085  dispatch EXECUTE    REJECTED (DISPATCH_UNAVAILABLE)
+     17:20:20.126  payment  COMPENSATE COMPENSATED
+     17:20:20.147  stock    COMPENSATE COMPENSATED
+     17:20:20.154  sale     FAIL       COMPENSATED (DISPATCH_UNAVAILABLE)
+[ok] pasos confirmados antes de la falla: stock -> payment
+[ok] compensación en orden inverso: payment -> stock (reembolsar y luego liberar)
+[ok] Saga FAILED: stock COMPENSATED, pago COMPENSATED, despacho REJECTED
+-> Reintento del cliente con la misma key: mismo resultado, sin efectos nuevos
+[ok] reintento -> 503 DISPATCH_UNAVAILABLE
+   resumen BFF: {"orderId":"64b9a174-1e7d-45c2-a540-5e4a6510987a","partial":true,"payment":{"availability":"available","data":{"orderId":"64b9a174-1e7d-45c2-a540-5e4a6510987a","status":"REFUNDED"}},"dispatch":{"availability":"not_found"}}
+[ok] stock 199 -> 199: reserva liberada
+[ok] pasarela: 1 cobro y 1 reembolso (no queda cobro sin venta); el reintento no agregó efectos
+[ok] Pagos registra el cobro como REFUNDED
+[ok] no existe orden pública para la venta fallida (GET /v1/orders/{id} -> 404)
+-> Se restaura Despacho (DISPATCH_FAIL_CREATE=false)
+   evidencia: evidencia-ci/escenario2-compensacion.json
+
+== Escenario 3 — CON protecciones (Circuit Breaker + Bulkhead + timeout 1,2 s) ==
+-> Pagos con Circuit Breaker=true, Bulkhead=true (máx 8), timeout pasarela 1200 ms
+-> Fase A: pasarela LENTA (3000 ms) y pico de 24 ventas simultáneas de 4 clientes
+   ventas: {"504 PAYMENT_TIMEOUT":8,"503 PAYMENT_UNAVAILABLE":16}; p50 452 ms, p95 1494.5 ms; el pico tardó 1501 ms
+   circuito OPEN (aperturas 1, rechazos 0); bulkhead pico en vuelo 8, rechazos 16
+   GET /v1/customers durante el pico: p95 24.9 ms {"200":11}
+   GET resumen BFF durante el pico: p95 38.3 ms {"200":11}
+-> Fase B: pasarela CAÍDA y 10 ventas seguidas
+     venta  1: 503 PAYMENT_UNAVAILABLE en 39 ms
+     venta  2: 503 PAYMENT_UNAVAILABLE en 33 ms
+     venta  3: 503 PAYMENT_UNAVAILABLE en 32 ms
+     venta  4: 503 PAYMENT_UNAVAILABLE en 30 ms
+     venta  5: 503 PAYMENT_UNAVAILABLE en 32 ms
+     venta  6: 503 PAYMENT_UNAVAILABLE en 32 ms
+     venta  7: 503 PAYMENT_UNAVAILABLE en 31 ms
+     venta  8: 503 PAYMENT_UNAVAILABLE en 48 ms
+     venta  9: 503 PAYMENT_UNAVAILABLE en 32 ms
+     venta 10: 503 PAYMENT_UNAVAILABLE en 30 ms
+   llamadas que llegaron a la pasarela caída: 0 de 10 ventas; circuito OPEN, aperturas 1
+-> Fase C: la pasarela vuelve a la normalidad
+   primera venta aceptada 3192 ms después de restaurar la pasarela (4 intentos)
+   consistencia: Sagas {"COMPLETED":1,"FAILED":37}
+   ventas confirmadas 1; stock 199 -> 198; cobros netos en la pasarela 1
+[ok] cada unidad descontada corresponde a una venta confirmada
+[ok] cada cobro neto en la pasarela corresponde a una venta confirmada
+
+== Escenario 3 — SIN protecciones (sin circuito ni bulkhead, timeout 30 s) ==
+-> Pagos con Circuit Breaker=false, Bulkhead=false (máx 8), timeout pasarela 30000 ms
+-> Fase A: pasarela LENTA (3000 ms) y pico de 24 ventas simultáneas de 4 clientes
+   ventas: {"504 PAYMENT_TIMEOUT":24}; p50 2290.2 ms, p95 2419.2 ms; el pico tardó 2421 ms
+   circuito CLOSED (aperturas 0, rechazos 0); bulkhead pico en vuelo 0, rechazos 0
+   GET /v1/customers durante el pico: p95 23.8 ms {"200":14}
+   GET resumen BFF durante el pico: p95 90.1 ms {"200":14}
+-> Fase B: pasarela CAÍDA y 10 ventas seguidas
+     venta  1: 503 PAYMENT_UNAVAILABLE en 62 ms
+     venta  2: 503 PAYMENT_UNAVAILABLE en 58 ms
+     venta  3: 503 PAYMENT_UNAVAILABLE en 63 ms
+     venta  4: 503 PAYMENT_UNAVAILABLE en 60 ms
+     venta  5: 503 PAYMENT_UNAVAILABLE en 62 ms
+     venta  6: 503 PAYMENT_UNAVAILABLE en 53 ms
+     venta  7: 503 PAYMENT_UNAVAILABLE en 53 ms
+     venta  8: 503 PAYMENT_UNAVAILABLE en 52 ms
+     venta  9: 503 PAYMENT_UNAVAILABLE en 62 ms
+     venta 10: 503 PAYMENT_UNAVAILABLE en 68 ms
+   llamadas que llegaron a la pasarela caída: 10 de 10 ventas; circuito CLOSED, aperturas 0
+-> Fase C: la pasarela vuelve a la normalidad
+   primera venta aceptada 60 ms después de restaurar la pasarela (1 intentos)
+   consistencia: Sagas {"FAILED":34,"COMPLETED":1}
+   ventas confirmadas 1; stock 198 -> 197; cobros netos en la pasarela 1
+[ok] cada unidad descontada corresponde a una venta confirmada
+[ok] cada cobro neto en la pasarela corresponde a una venta confirmada
+-> Se restauran la pasarela (normal) y Pagos (protecciones por defecto)
+
+== Comparación ==
+   Con protección   lenta: ventas p50 452 ms / p95 1494.5 ms {"504 PAYMENT_TIMEOUT":8,"503 PAYMENT_UNAVAILABLE":16}  |  caída: p95 47.7 ms, 0 llamadas a la pasarela
+   Sin protección   lenta: ventas p50 2290.2 ms / p95 2419.2 ms {"504 PAYMENT_TIMEOUT":24}  |  caída: p95 68.2 ms, 10 llamadas a la pasarela
+   evidencia: evidencia-ci/escenario3-cascada.json
+
+Listo. Evidencia en evidencia-ci

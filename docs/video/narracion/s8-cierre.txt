@@ -1,0 +1,1 @@
+En resumen: el camino feliz confirma los tres pasos, la falla del último paso se compensa en orden inverso, y la falla de la pasarela queda contenida en Pagos. Todo se reproduce con dóquer compóus ap y un script, y la evidencia y el informe están en el repositorio.

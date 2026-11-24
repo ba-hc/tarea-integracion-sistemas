@@ -14,6 +14,7 @@ trae el script y la evidencia que demuestran que esas protecciones contienen la 
 
 - **Informe:** [docs/informe/INFORME-T2.pdf](docs/informe/INFORME-T2.pdf) (fuente en [docs/informe](docs/informe/)).
 - **Evidencia de la última corrida de CI:** [docs/evidencia](docs/evidencia/README.md).
+- **Video (≤ 8 min):** reconstrucción narrada de esa corrida; fuente y cómo regenerarlo en [docs/video](docs/video/README.md). El MP4 se entrega aparte.
 - **Guion de demo en vivo:** [docs/t2/DEMO-P4.md](docs/t2/DEMO-P4.md) y el script [scripts/demo/escenarios.mjs](scripts/demo/escenarios.mjs).
 
 ## Integrantes y responsabilidades (T2)

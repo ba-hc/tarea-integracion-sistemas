@@ -148,7 +148,7 @@ def main():
 pico tardó {ms(slow_u['wallMs'])} en drenar. Pagos, con 30 s de plazo, siguió esperando a la pasarela, que <i>aplicó</i> los
 {ua['consistency']['pasarela']['chargesApproved'] - ua['consistency']['confirmedSales']} cobros rechazados: la Saga tuvo que reembolsarlos todos
 (con protecciones fueron {pa['consistency']['pasarela']['chargesApproved'] - pa['consistency']['confirmedSales']}, sólo las llamadas que el bulkhead dejó pasar). En k6, los ≈600 cobros por corrida agotaron los 2 s del cliente y la pasarela <i>aplicó</i> todos:
-dinero cobrado que quien llama no sabe si se cobró,. Con protecciones, el bulkhead dejó pasar sólo 8 llamadas,
+dinero cobrado que quien llama no sabe si se cobró. Con protecciones, el bulkhead dejó pasar sólo 8 llamadas,
 el circuito abrió y el resto se rechazó sin esperar a la pasarela (p50 de la venta {ms(slow_p['p50'])} frente a {ms(slow_u['p50'])}; {m('protected','slow','pending'):.0f} cobros en duda por corrida en k6
 frente a {m('unprotected','slow','client_timeouts'):.0f}). El rechazo rápido es seguro: garantiza que no hubo cobro, así que Ventas libera la unidad al instante.</div>
 <div class="callout"><b>Caída.</b> Ambos brazos rechazan las ventas (no hay a quién cobrar), pero sin circuito cada venta golpea a la pasarela caída
