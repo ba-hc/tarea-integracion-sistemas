@@ -1,0 +1,16 @@
+# Overlay SÓLO para desarrollo y la CI de la T1. No forma parte de la demo.
+#
+# El Compose raíz no publica Sales ni Inventory: el único punto de entrada es el
+# API Gateway. La suite black-box de la T1 (tests/system) y el experimento de
+# timeout (experiments/timeout) hablan directo con Sales, así que este overlay
+# vuelve a publicar esos dos puertos en loopback:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile experiment up --build
+
+services:
+  sales-api:
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  inventory-grpc:
+    ports:
+      - "127.0.0.1:50051:50051"

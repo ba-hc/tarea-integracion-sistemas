@@ -1,0 +1,8 @@
+{
+  "run_id": 45446846259,
+  "run_url": "https://github.com/ba-hc/tarea-integracion-sistemas/actions/runs/45446846259",
+  "commit": "e4c7f9049963b88ab640e8451ae4556f20621fee",
+  "date": "2026-11-24",
+  "job": "T2 end-to-end scenarios (single docker compose up)",
+  "command": "node scripts/demo/escenarios.mjs todo --out evidencia-ci"
+}

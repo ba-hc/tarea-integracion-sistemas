@@ -1,0 +1,1 @@
+Escenario uno, el camino feliz. Ventas orquesta la saga: reserva el stock en Inventario, cobra en Pagos y crea el despacho. La venta responde doscientos uno, confirmada, en doscientos veintiocho milisegundos.

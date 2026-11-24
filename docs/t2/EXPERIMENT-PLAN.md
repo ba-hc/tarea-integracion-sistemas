@@ -104,7 +104,7 @@ Los campos útiles de E3 son `params`, `arms[].protected`, `arms[].aggregate.pos
 - `GetPart` es una sonda de observabilidad; no prueba atomicidad de P1 ni el orden temporal de los
   efectos.
 - No se ejecutó CI de GitHub ni una auditoría npm nueva.
-- La integración final en el Compose raíz y la CI del grupo siguen pendientes de coordinación.
+- La integración final en el Compose raíz y la CI ya está hecha; la CI repite E1–E3 sobre `docker compose up` ([docs/evidencia](../evidencia/README.md)).
 
 ## Reproducibilidad
 

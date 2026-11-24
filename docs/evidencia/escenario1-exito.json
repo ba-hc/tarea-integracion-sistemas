@@ -1,0 +1,88 @@
+{
+  "gateway": "http://127.0.0.1:8080",
+  "startedAt": "2026-11-24T17:20:10.620Z",
+  "sagaSteps": "stock,payment,dispatch",
+  "finishedAt": "2026-11-24T17:20:13.044Z",
+  "orderId": "24b3a76b-636d-4364-ac95-4b8f8c8e63ec",
+  "idempotencyKey": "demo-exito-4234ea90-4cee-4b40-ad27-5e1034d4f131",
+  "sale": {
+    "status": 201,
+    "orderStatus": "CONFIRMED",
+    "ms": 228
+  },
+  "replay": {
+    "status": 201,
+    "sameOrder": true
+  },
+  "conflict": {
+    "status": 409,
+    "code": "IDEMPOTENCY_KEY_CONFLICT"
+  },
+  "summary": {
+    "orderId": "24b3a76b-636d-4364-ac95-4b8f8c8e63ec",
+    "partial": false,
+    "payment": {
+      "availability": "available",
+      "data": {
+        "orderId": "24b3a76b-636d-4364-ac95-4b8f8c8e63ec",
+        "status": "CHARGED"
+      }
+    },
+    "dispatch": {
+      "availability": "available",
+      "data": {
+        "orderId": "24b3a76b-636d-4364-ac95-4b8f8c8e63ec",
+        "status": "CREATED",
+        "items": [
+          {
+            "partId": "d6e1fd98-cb07-458f-aa12-6fe220b37604",
+            "quantity": 1
+          }
+        ]
+      }
+    }
+  },
+  "saga": {
+    "orderId": "24b3a76b-636d-4364-ac95-4b8f8c8e63ec",
+    "status": "COMPLETED",
+    "steps": {
+      "stock": "DONE",
+      "payment": "DONE",
+      "dispatch": "DONE"
+    },
+    "events": [
+      {
+        "step": "stock",
+        "action": "EXECUTE",
+        "outcome": "DONE",
+        "at": "17:20:12.218"
+      },
+      {
+        "step": "payment",
+        "action": "EXECUTE",
+        "outcome": "DONE",
+        "at": "17:20:12.299"
+      },
+      {
+        "step": "dispatch",
+        "action": "EXECUTE",
+        "outcome": "DONE",
+        "at": "17:20:12.338"
+      },
+      {
+        "step": "sale",
+        "action": "COMPLETE",
+        "outcome": "DONE",
+        "at": "17:20:12.364"
+      }
+    ]
+  },
+  "stock": {
+    "before": 200,
+    "after": 199
+  },
+  "pasarela": {
+    "chargesApprovedDelta": 1,
+    "refundsDelta": 0
+  }
+}

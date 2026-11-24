@@ -1,5 +1,7 @@
 # P4 — Especificación de exposición: Gateway y BFF
 
+> **Entrega final (2026-11-24):** el Compose raíz ya integra Gateway y BFF, ejecuta la Saga completa (`SAGA_STEPS=stock,payment,dispatch`) por defecto y sólo publica el Gateway. La CI corre los escenarios end-to-end sobre ese `docker compose up` ([docs/evidencia](../evidencia/README.md)). Las menciones a integración «pendiente» más abajo describen el estado histórico de este hito.
+
 **Estado:** CERRADO en modo overlay local (2026-11-23). Gateway y BFF conservan su runtime y se
 verificaron contra Pagos P2 **real** y la pasarela de pagos **simulada oficial**; la Saga P3 está
 integrada y la corrida full quedó verificada. No hay dinero real. **Línea base histórica:**

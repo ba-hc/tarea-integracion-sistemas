@@ -1,6 +1,6 @@
 # ADR-005 - Venta como Saga orquestada por Ventas
 
-**Estado:** Aceptada (T2-301/T2-303). Pagos (P2) sigue pendiente de integración.
+**Estado:** Aceptada (T2-301/T2-303). Pagos (P2) integrado; la Saga completa es el comportamiento por defecto del Compose raíz.
 
 ## Contexto
 

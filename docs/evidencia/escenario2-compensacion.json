@@ -1,0 +1,93 @@
+{
+  "gateway": "http://127.0.0.1:8080",
+  "startedAt": "2026-11-24T17:20:10.620Z",
+  "sagaSteps": "stock,payment,dispatch",
+  "finishedAt": "2026-11-24T17:20:26.998Z",
+  "idempotencyKey": "demo-comp-a3c41918-a417-4877-a466-40031b046d38",
+  "orderId": "64b9a174-1e7d-45c2-a540-5e4a6510987a",
+  "sale": {
+    "status": 503,
+    "code": "DISPATCH_UNAVAILABLE",
+    "ms": 174
+  },
+  "replay": {
+    "status": 503,
+    "code": "DISPATCH_UNAVAILABLE"
+  },
+  "saga": {
+    "orderId": "64b9a174-1e7d-45c2-a540-5e4a6510987a",
+    "status": "FAILED",
+    "steps": {
+      "stock": "COMPENSATED",
+      "payment": "COMPENSATED",
+      "dispatch": "REJECTED"
+    },
+    "failureCode": "DISPATCH_UNAVAILABLE",
+    "events": [
+      {
+        "step": "stock",
+        "action": "EXECUTE",
+        "outcome": "DONE",
+        "at": "17:20:20.010"
+      },
+      {
+        "step": "payment",
+        "action": "EXECUTE",
+        "outcome": "DONE",
+        "at": "17:20:20.043"
+      },
+      {
+        "step": "dispatch",
+        "action": "EXECUTE",
+        "outcome": "REJECTED",
+        "code": "DISPATCH_UNAVAILABLE",
+        "at": "17:20:20.085"
+      },
+      {
+        "step": "payment",
+        "action": "COMPENSATE",
+        "outcome": "COMPENSATED",
+        "at": "17:20:20.126"
+      },
+      {
+        "step": "stock",
+        "action": "COMPENSATE",
+        "outcome": "COMPENSATED",
+        "at": "17:20:20.147"
+      },
+      {
+        "step": "sale",
+        "action": "FAIL",
+        "outcome": "COMPENSATED",
+        "code": "DISPATCH_UNAVAILABLE",
+        "at": "17:20:20.154"
+      }
+    ]
+  },
+  "sagaStatuses": {
+    "FAILED": 1
+  },
+  "stock": {
+    "before": 199,
+    "after": 199
+  },
+  "pasarela": {
+    "chargesApprovedDelta": 1,
+    "refundsDelta": 1
+  },
+  "summary": {
+    "orderId": "64b9a174-1e7d-45c2-a540-5e4a6510987a",
+    "partial": true,
+    "payment": {
+      "availability": "available",
+      "data": {
+        "orderId": "64b9a174-1e7d-45c2-a540-5e4a6510987a",
+        "status": "REFUNDED"
+      }
+    },
+    "dispatch": {
+      "availability": "not_found"
+    }
+  },
+  "publicOrderStatus": 404
+}
