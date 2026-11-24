@@ -570,7 +570,8 @@ async function cascada(referenceOrderId) {
     evidence.unprotected = await arm('SIN protecciones (sin circuito ni bulkhead, timeout 30 s)', false, referenceOrderId);
   } finally {
     step('Se restauran la pasarela (normal) y Pagos (protecciones por defecto)');
-    await setPasarela(PASARELA_NORMAL).catch(() => {});
+    try { await setPasarela(PASARELA_NORMAL); } catch { // se informa abajo si Pagos tampoco vuelve
+    }
     recreate('payments-api', PAYMENTS_DEFAULTS);
   }
   title('Comparación');
